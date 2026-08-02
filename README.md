@@ -21,7 +21,7 @@ npm run build
 npm start
 ```
 
-The server binds to `127.0.0.1:3101` by default and exposes `POST /raw/mcp` plus `GET /raw/healthz`. Override the bind with `HOST` and `PORT`. Production replicas must share an `MCP_REQUEST_STATE_SECRET` of at least 32 bytes; development uses a process-local ephemeral key. In another shell:
+The server binds to `127.0.0.1:3101` by default and exposes `POST /raw/mcp` plus `GET /raw/healthz`. Override the bind with `HOST` and `PORT`. Production replicas must share an `MCP_REQUEST_STATE_SECRET` of at least 32 bytes and set `DYNAMODB_TABLE` (plus optional `DYNAMODB_ENDPOINT` for DynamoDB Local); development uses process-local ephemeral key and effect storage. In another shell:
 
 ```bash
 node dist/src/main.js --version
@@ -51,6 +51,7 @@ docker build --target runtime -t incident-mcp-raw .
 docker run --rm -p 127.0.0.1:3101:3101 \
   -e HOST=0.0.0.0 \
   -e MCP_REQUEST_STATE_SECRET="$(openssl rand -hex 32)" \
+  -e EFFECT_STORE=memory \
   incident-mcp-raw
 # Or inspect the image version without starting the service:
 docker run --rm incident-mcp-raw --version

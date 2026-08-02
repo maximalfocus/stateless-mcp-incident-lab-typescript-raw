@@ -1,0 +1,12 @@
+{
+  "suppressions": [
+    {
+      "advisory": "license:0BSD:tslib",
+      "package": "node_modules/tslib",
+      "license": "0BSD",
+      "owner": "stateless-mcp-incident-lab maintainers",
+      "rationale": "tslib is a transitive runtime dependency of the DynamoDB adapter; 0BSD is permissive and attribution-compatible with the lab.",
+      "expires_at": "2027-08-02T00:00:00Z"
+    }
+  ]
+}

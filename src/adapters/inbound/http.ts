@@ -1,8 +1,10 @@
 import { primitiveError, primitiveResult } from '../../application/catalogs.js'
 import { discover } from '../../application/discover.js'
+import type { EffectStore } from '../../application/effects.js'
 import { handleMrtr } from '../../application/mrtr.js'
 import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
+import { PROTOCOL_VERSION } from '../../protocol/version.js'
 
 function response(status: number, body: unknown, headers: Record<string, string> = {}): unknown {
   return {
@@ -37,11 +39,12 @@ function invalidRequest(id?: unknown): unknown {
   }
 }
 
-export function handleHttp(
+export async function handleHttp(
   requestValue: unknown,
   seedValue: unknown,
   inputValue: unknown,
-): unknown {
+  effectStore?: EffectStore,
+): Promise<unknown> {
   const input = isObject(inputValue) ? inputValue : {}
   const bodyLimit =
     typeof input.configured_limit_bytes === 'number'
@@ -65,13 +68,15 @@ export function handleHttp(
   }
   if (Array.isArray(input.requests)) {
     return {
-      observations: input.requests.map((entry) => {
-        const item = isObject(entry) ? entry : {}
-        return {
-          case: typeof item.case === 'string' ? item.case : '',
-          response: handleHttp(item, seedValue, {}),
-        }
-      }),
+      observations: await Promise.all(
+        input.requests.map(async (entry) => {
+          const item = isObject(entry) ? entry : {}
+          return {
+            case: typeof item.case === 'string' ? item.case : '',
+            response: await handleHttp(item, seedValue, {}, effectStore),
+          }
+        }),
+      ),
     }
   }
   if (!isObject(requestValue)) throw new TypeError('HTTP request must be an object')
@@ -87,11 +92,47 @@ export function handleHttp(
   if (!isJsonRpcRequest(body)) {
     return response(400, invalidRequest(isObject(body) ? body.id : undefined))
   }
-  if (!headers.has('mcp-protocol-version')) {
+  const requestParams = isObject(body.params) ? body.params : {}
+  const meta = isObject(requestParams._meta) ? requestParams._meta : undefined
+  const bodyVersion = meta?.['io.modelcontextprotocol/protocolVersion']
+  if (typeof bodyVersion !== 'string') {
+    return response(400, {
+      jsonrpc: '2.0',
+      id: body.id,
+      error: {
+        code: -32602,
+        message: 'Invalid params',
+        data: { field: 'params._meta.io.modelcontextprotocol/protocolVersion', reason: 'required' },
+      },
+    })
+  }
+  const headerVersion = headers.get('mcp-protocol-version')
+  if (headerVersion === undefined) {
     return response(
       400,
       metadataError(body.id, { header: 'MCP-Protocol-Version', reason: 'required' }),
     )
+  }
+  if (headerVersion !== bodyVersion) {
+    return response(
+      400,
+      metadataError(body.id, {
+        header: 'MCP-Protocol-Version',
+        expected: bodyVersion,
+        actual: headerVersion,
+      }),
+    )
+  }
+  if (bodyVersion !== PROTOCOL_VERSION) {
+    return response(400, {
+      jsonrpc: '2.0',
+      id: body.id,
+      error: {
+        code: -32022,
+        message: 'Unsupported protocol version',
+        data: { requested: bodyVersion, supported: [PROTOCOL_VERSION] },
+      },
+    })
   }
   const methodHeader = headers.get('mcp-method')
   if (methodHeader === undefined) {
@@ -132,7 +173,16 @@ export function handleHttp(
     if (nameHeader === undefined) {
       return response(400, metadataError(body.id, { header: 'Mcp-Name', reason: 'required' }))
     }
-    if (typeof sourceName === 'string' && decodeHeaderValue(nameHeader) !== sourceName) {
+    let decodedName: string
+    try {
+      decodedName = decodeHeaderValue(nameHeader)
+    } catch {
+      return response(
+        400,
+        metadataError(body.id, { header: 'Mcp-Name', reason: 'invalid encoding' }),
+      )
+    }
+    if (typeof sourceName === 'string' && decodedName !== sourceName) {
       return response(
         400,
         metadataError(body.id, { header: 'Mcp-Name', expected: sourceName, actual: nameHeader }),
@@ -142,7 +192,16 @@ export function handleHttp(
       const argumentsValue = isObject(params.arguments) ? params.arguments : {}
       const service = argumentsValue.service
       const serviceHeader = headers.get('mcp-param-service')
-      if (typeof service === 'string' && serviceHeader !== service) {
+      let decodedService: string | undefined
+      try {
+        decodedService = serviceHeader === undefined ? undefined : decodeHeaderValue(serviceHeader)
+      } catch {
+        return response(
+          400,
+          metadataError(body.id, { header: 'Mcp-Param-Service', reason: 'invalid encoding' }),
+        )
+      }
+      if (typeof service === 'string' && decodedService !== service) {
         return response(
           400,
           metadataError(body.id, {
@@ -177,7 +236,8 @@ export function handleHttp(
       },
     })
   }
-  const mrtr = body.method === 'tools/call' ? handleMrtr(body.params, input) : undefined
+  const mrtr =
+    body.method === 'tools/call' ? await handleMrtr(body.params, input, effectStore) : undefined
   if (mrtr !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
   const result = primitiveResult(body.method, body.params)
   if (result !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, result })

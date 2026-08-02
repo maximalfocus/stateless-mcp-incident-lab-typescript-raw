@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
@@ -260,6 +261,26 @@ async function loadFixture(dir: string): Promise<Fixture> {
   }
 }
 
+let npmAuditReport: Json | undefined
+
+function dependencyInput(input: Json): Json {
+  if (!isRecord(input) || input.subject !== 'npm_audit') return input
+  if (npmAuditReport === undefined) {
+    let output: string
+    try {
+      output = execFileSync('npm', ['audit', '--json', '--audit-level=high'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (error) {
+      const stdout = (error as { stdout?: string | Buffer }).stdout
+      output = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : (stdout ?? '')
+    }
+    npmAuditReport = JSON.parse(output) as Json
+  }
+  return { ...input, report: npmAuditReport }
+}
+
 function materializeMrtrState(fixture: Fixture): Fixture {
   if (fixture.category !== 'mrtr' || !isRecord(fixture.request)) return fixture
   const request = structuredClone(fixture.request)
@@ -285,8 +306,9 @@ function materializeMrtrState(fixture: Fixture): Fixture {
     expiresAt: new Date(clock + (input.state_fault === 'expired' ? -1 : 5 * 60_000)).toISOString(),
   }
   let token = signRequestState(claims)
-  if (input.state_fault === 'tampered')
-    token = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`
+  if (input.state_fault === 'tampered') {
+    token = `${token.startsWith('A') ? 'B' : 'A'}${token.slice(1)}`
+  }
   params.requestState = token
   if (typeof input.requestState_bytes === 'string') input.requestState_bytes = token
   return { ...fixture, request, input }
@@ -326,7 +348,9 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
     }
     const candidate = functions[fixture.category]
     if (candidate === undefined) throw new Error(`No function adapter for ${fixture.category}`)
-    return await candidate(fixture.input)
+    return await candidate(
+      fixture.category === 'dependencies' ? dependencyInput(fixture.input) : fixture.input,
+    )
   }
   throw new Error(`Unsupported boundary ${boundary}`)
 }

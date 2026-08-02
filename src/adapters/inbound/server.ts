@@ -1,15 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { MemoryEffectStore, type EffectStore } from '../../application/index.js'
 import { healthResponse } from './health.js'
 import { handleHttp } from './http.js'
 import { handleSse } from './sse.js'
 
 const DEFAULT_BODY_LIMIT = 1024 * 1024
 
-type ServerOptions = {
+export type ServerOptions = {
   host?: string
   port?: number
   bodyLimitBytes?: number
-  ready?: () => boolean
+  effectStore?: EffectStore
+  ready?: () => boolean | Promise<boolean>
 }
 
 function headersOf(request: IncomingMessage): Record<string, string> {
@@ -63,37 +65,73 @@ function sendSse(response: ServerResponse, observation: unknown): void {
     'Cache-Control': 'no-cache',
     ...value.headers,
   })
-  for (const event of value.events ?? []) response.write(`data: ${JSON.stringify(event)}\n\n`)
+  for (const eventValue of value.events ?? []) {
+    const event =
+      typeof eventValue === 'object' && eventValue !== null && !Array.isArray(eventValue)
+        ? (eventValue as Record<string, unknown>)
+        : {}
+    if (typeof event.event === 'string') response.write(`event: ${event.event}\n`)
+    response.write(`data: ${JSON.stringify(event.data)}\n\n`)
+  }
   response.end()
 }
 
 export function createRawServer(options: ServerOptions = {}): Server {
   const bodyLimit = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT
+  const effectStore = options.effectStore ?? new MemoryEffectStore()
   const ready =
     options.ready ??
-    (() =>
-      process.env.NODE_ENV !== 'production' ||
-      (process.env.MCP_REQUEST_STATE_SECRET !== undefined &&
-        Buffer.byteLength(process.env.MCP_REQUEST_STATE_SECRET) >= 32))
+    (async () => {
+      const secretReady =
+        process.env.NODE_ENV !== 'production' ||
+        (process.env.MCP_REQUEST_STATE_SECRET !== undefined &&
+          Buffer.byteLength(process.env.MCP_REQUEST_STATE_SECRET) >= 32)
+      const persistenceReady =
+        process.env.NODE_ENV !== 'production' ||
+        options.effectStore !== undefined ||
+        process.env.EFFECT_STORE === 'memory'
+      return secretReady && persistenceReady && (await effectStore.ready())
+    })
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
       const path = new URL(request.url ?? '/', 'http://localhost').pathname
       if (path === '/raw/healthz') {
-        send(response, healthResponse(ready()))
+        send(response, healthResponse(await ready()))
         return
       }
       if (path !== '/raw/mcp') {
         send(response, { status: 404, headers: { 'Content-Type': 'application/json' }, body: null })
         return
       }
+      const origin = request.headers.origin
+      if (
+        origin !== undefined &&
+        !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin)
+      ) {
+        send(response, { status: 403, headers: { 'Content-Type': 'application/json' }, body: null })
+        return
+      }
+      if (request.method !== 'POST') {
+        send(response, {
+          status: 405,
+          headers: { 'Content-Type': 'application/json', Allow: 'POST' },
+          body: null,
+        })
+        return
+      }
       const bodyBytes = await readBody(request, bodyLimit)
       if (bodyBytes === undefined) {
         send(
           response,
-          handleHttp({ method: request.method, headers: headersOf(request), body: {} }, null, {
-            body_bytes: bodyLimit + 1,
-            configured_limit_bytes: bodyLimit,
-          }),
+          await handleHttp(
+            { method: request.method, headers: headersOf(request), body: {} },
+            null,
+            {
+              body_bytes: bodyLimit + 1,
+              configured_limit_bytes: bodyLimit,
+            },
+            effectStore,
+          ),
         )
         return
       }
@@ -111,15 +149,40 @@ export function createRawServer(options: ServerOptions = {}): Server {
           ? (body as { params?: { _meta?: { progressToken?: unknown } } }).params?._meta
           : undefined
       if (acceptsSse && meta?.progressToken !== undefined) {
+        const validation = await handleHttp(
+          requestValue,
+          null,
+          { body_bytes: bodyBytes.length, configured_limit_bytes: bodyLimit },
+          effectStore,
+        )
+        const validationValue =
+          typeof validation === 'object' && validation !== null && !Array.isArray(validation)
+            ? (validation as Record<string, unknown>)
+            : {}
+        const validationBody =
+          typeof validationValue.body === 'object' &&
+          validationValue.body !== null &&
+          !Array.isArray(validationValue.body)
+            ? (validationValue.body as Record<string, unknown>)
+            : {}
+        if (validationValue.status !== 200 || 'error' in validationBody) {
+          send(response, validation)
+          return
+        }
         sendSse(response, await handleSse(requestValue, null, {}))
         return
       }
       send(
         response,
-        await handleHttp(requestValue, null, {
-          body_bytes: bodyBytes.length,
-          configured_limit_bytes: bodyLimit,
-        }),
+        await handleHttp(
+          requestValue,
+          null,
+          {
+            body_bytes: bodyBytes.length,
+            configured_limit_bytes: bodyLimit,
+          },
+          effectStore,
+        ),
       )
     } catch (error) {
       if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'application/json' })

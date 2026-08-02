@@ -43,11 +43,42 @@ export function executeFunction(inputValue: unknown): unknown {
     }
   }
   if (inputValue.subject === 'runtime_licenses') {
-    const dependencies = isObject(packageJson.dependencies) ? packageJson.dependencies : {}
-    return { violations: Object.keys(dependencies).length === 0 ? [] : [] }
+    const allowed = new Set(
+      Array.isArray(inputValue.allow)
+        ? inputValue.allow.filter((value): value is string => typeof value === 'string')
+        : [],
+    )
+    const packages = isObject(lock.packages) ? lock.packages : {}
+    const exceptions = existsSync('dependency-exceptions.json')
+      ? readObject('dependency-exceptions.json')
+      : {}
+    const suppressions = Array.isArray(exceptions.suppressions) ? exceptions.suppressions : []
+    const violations = Object.entries(packages)
+      .filter(([path, value]) => path !== '' && isObject(value) && value.dev !== true)
+      .flatMap(([path, value]) => {
+        const license = isObject(value) && typeof value.license === 'string' ? value.license : ''
+        const excepted = suppressions.some(
+          (item) => isObject(item) && item.package === path && item.license === license,
+        )
+        return allowed.has(license) || excepted
+          ? []
+          : [`${path}: unapproved license ${license || '<missing>'}`]
+      })
+      .sort()
+    return { violations }
   }
   if (inputValue.subject === 'npm_audit') {
-    return { violations: [], unsuppressed: [] }
+    if (!isObject(inputValue.report) || !isObject(inputValue.report.vulnerabilities)) {
+      throw new TypeError('npm audit report is required')
+    }
+    const unsuppressed = Object.entries(inputValue.report.vulnerabilities)
+      .filter(
+        ([, value]) =>
+          isObject(value) && (value.severity === 'high' || value.severity === 'critical'),
+      )
+      .map(([name, value]) => `${name}:${String(isObject(value) ? value.severity : 'unknown')}`)
+      .sort()
+    return { violations: unsuppressed, unsuppressed }
   }
   if (inputValue.subject === 'vulnerability_suppressions') {
     const required = Array.isArray(inputValue.required_fields)

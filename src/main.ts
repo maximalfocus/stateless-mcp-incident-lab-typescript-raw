@@ -2,6 +2,7 @@
 
 import { pathToFileURL } from 'node:url'
 import { startRawServer } from './adapters/inbound/index.js'
+import { createEffectStoreFromEnv } from './adapters/outbound/index.js'
 import { runNetworkCli } from './client/cli.js'
 
 export const implementation = 'raw' as const
@@ -20,7 +21,8 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
 
 export async function run(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   if (argv[0] === 'serve') {
-    const server = await startRawServer()
+    const effectStore = createEffectStoreFromEnv()
+    const server = await startRawServer(effectStore === undefined ? {} : { effectStore })
     const address = server.address()
     const location = typeof address === 'object' && address !== null ? address.port : 3101
     process.stdout.write(`incident-mcp raw listening on ${String(location)}\n`)

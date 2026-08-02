@@ -36,6 +36,14 @@ export async function rpcCall(
   if (method === 'resources/read' && typeof params.uri === 'string') {
     headers['Mcp-Name'] = encodeHeaderValue(params.uri)
   }
+  const argumentsValue = object(params.arguments)
+  if (
+    method === 'tools/call' &&
+    params.name === 'query_telemetry' &&
+    typeof argumentsValue.service === 'string'
+  ) {
+    headers['Mcp-Param-Service'] = encodeHeaderValue(argumentsValue.service)
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers,

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { signRequestState, verifyRequestState } from '../protocol/request-state.js'
+import type { EffectStore } from './effects.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -60,7 +61,11 @@ function inputRequired(
 
 export type MrtrResponse = { result: Record<string, unknown> } | { error: Record<string, unknown> }
 
-export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrResponse | undefined {
+export async function handleMrtr(
+  paramsValue: unknown,
+  inputValue: unknown,
+  effectStore?: EffectStore,
+): Promise<MrtrResponse | undefined> {
   if (!isObject(paramsValue) || paramsValue.name !== 'execute_remediation') return undefined
   const input = isObject(inputValue) ? inputValue : {}
   const argumentsValue = isObject(paramsValue.arguments) ? paramsValue.arguments : {}
@@ -142,11 +147,12 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
         ),
       }
     }
+    const effectApplied = effectStore === undefined ? true : await effectStore.claim(remediationId)
     let structuredContent: Record<string, unknown>
     if (typeof input.requestState_bytes === 'string') {
       structuredContent = {
         request_state_echoed_exactly: requestState === input.requestState_bytes,
-        effect_count: 1,
+        effect_count: effectApplied ? 1 : 0,
       }
     } else if (
       typeof input.initial_replica === 'string' &&
@@ -155,10 +161,14 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
       structuredContent = {
         initial_replica: input.initial_replica,
         retry_replica: input.retry_replica,
-        effect_count: 1,
+        effect_count: effectApplied ? 1 : 0,
       }
     } else {
-      structuredContent = { remediation_id: remediationId, status: 'EXECUTED', effect_count: 1 }
+      structuredContent = {
+        remediation_id: remediationId,
+        status: 'EXECUTED',
+        effect_count: effectApplied ? 1 : 0,
+      }
     }
     return {
       result: {
