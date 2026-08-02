@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { signRequestState } from '../adapters/outbound/request-state.js'
+import { signRequestState } from '../protocol/request-state.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
