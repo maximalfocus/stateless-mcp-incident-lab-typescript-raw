@@ -25,4 +25,13 @@ describe('strict golden matching', () => {
       matchValue({ assertions: [{ type: 'strict_http_shape' }], status: 200 }, { status: 200 }),
     ).toEqual([])
   })
+
+  it('enforces forbidden headers without treating the directive as output', () => {
+    const expected = {
+      headers: { '{{ALLOW_EXTRA}}': true },
+      forbidden_headers: ['Mcp-Session-Id'],
+    }
+    expect(matchValue(expected, { headers: {} })).toEqual([])
+    expect(matchValue(expected, { headers: { 'mcp-session-id': 'x' } })).not.toEqual([])
+  })
 })

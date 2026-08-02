@@ -71,6 +71,16 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
   const errors: string[] = []
   for (const [key, value] of Object.entries(expectedRecord)) {
     if (key === ALLOW_EXTRA || key === 'assertions') continue
+    if (key === 'forbidden_headers' && Array.isArray(value)) {
+      const headers = isRecord(actual.headers) ? actual.headers : {}
+      const present = new Set(Object.keys(headers).map((name) => name.toLowerCase()))
+      for (const name of value) {
+        if (typeof name === 'string' && present.has(name.toLowerCase())) {
+          errors.push(`${path}.headers: forbidden ${name}`)
+        }
+      }
+      continue
+    }
     if (!(key in actual)) errors.push(`${path}.${key}: missing`)
     else errors.push(...matchValue(value, actual[key], `${path}.${key}`))
   }
