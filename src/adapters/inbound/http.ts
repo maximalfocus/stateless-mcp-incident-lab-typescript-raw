@@ -41,6 +41,20 @@ export function handleHttp(
   inputValue: unknown,
 ): unknown {
   const input = isObject(inputValue) ? inputValue : {}
+  if (
+    typeof input.body_bytes === 'number' &&
+    typeof input.configured_limit_bytes === 'number' &&
+    input.body_bytes > input.configured_limit_bytes
+  ) {
+    return response(413, {
+      jsonrpc: '2.0',
+      error: {
+        code: -31999,
+        message: 'Request body too large',
+        data: { limitBytes: input.configured_limit_bytes },
+      },
+    })
+  }
   if (Array.isArray(input.requests)) {
     return {
       observations: input.requests.map((entry) => {
@@ -82,6 +96,21 @@ export function handleHttp(
     )
   }
   const namedMethods = new Set(['tools/call', 'resources/read', 'prompts/get'])
+  if (
+    typeof input.deadline_ms === 'number' &&
+    typeof input.operation_duration_ms === 'number' &&
+    input.operation_duration_ms > input.deadline_ms
+  ) {
+    return response(504, {
+      jsonrpc: '2.0',
+      id: body.id,
+      error: {
+        code: -31998,
+        message: 'Request deadline exceeded',
+        data: { deadlineMs: input.deadline_ms },
+      },
+    })
+  }
   if (namedMethods.has(body.method)) {
     const params = isObject(body.params) ? body.params : {}
     const sourceName = typeof params.name === 'string' ? params.name : params.uri

@@ -47,6 +47,30 @@ export function executeFunction(inputValue: unknown): unknown {
     const encoded = encodeHeaderValue(inputValue.value)
     return { encoded, decoded: decodeHeaderValue(encoded) }
   }
+  if (inputValue.operation === 'filter_transport_tools') {
+    const tools = Array.isArray(inputValue.tools) ? inputValue.tools : []
+    const accepted: string[] = []
+    const rejected: { name: string; reason: string }[] = []
+    for (const entry of tools) {
+      const tool = isObject(entry) ? entry : {}
+      const name = typeof tool.name === 'string' ? tool.name : ''
+      const schema = isObject(tool.inputSchema) ? tool.inputSchema : {}
+      const properties = isObject(schema.properties) ? schema.properties : {}
+      const invalid = Object.values(properties).some(
+        (property) =>
+          isObject(property) &&
+          'x-mcp-header' in property &&
+          !validHeaderAnnotation(property['x-mcp-header']),
+      )
+      if (invalid) {
+        rejected.push({
+          name,
+          reason: 'x-mcp-header must contain only ASCII letters, digits, and hyphen',
+        })
+      } else accepted.push(name)
+    }
+    return { accepted, rejected }
+  }
   if (inputValue.operation === 'derive_mirrored_headers') {
     const annotation = isObject(inputValue.annotation) ? inputValue.annotation : {}
     const argument = typeof annotation.argument === 'string' ? annotation.argument : ''
