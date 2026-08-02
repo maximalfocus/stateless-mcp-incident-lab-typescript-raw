@@ -33,3 +33,34 @@ export function deriveParameterHeader(
 export function validHeaderAnnotation(value: unknown): boolean {
   return typeof value === 'string' && /^[A-Za-z0-9-]+$/.test(value)
 }
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function executeFunction(inputValue: unknown): unknown {
+  if (!isObject(inputValue) || typeof inputValue.operation !== 'string') {
+    throw new TypeError('Transport operation must be named')
+  }
+  if (inputValue.operation === 'header_codec_round_trip') {
+    if (typeof inputValue.value !== 'string') throw new TypeError('Header value must be a string')
+    const encoded = encodeHeaderValue(inputValue.value)
+    return { encoded, decoded: decodeHeaderValue(encoded) }
+  }
+  if (inputValue.operation === 'derive_mirrored_headers') {
+    const annotation = isObject(inputValue.annotation) ? inputValue.annotation : {}
+    const argument = typeof annotation.argument === 'string' ? annotation.argument : ''
+    const header = typeof annotation.header === 'string' ? annotation.header : ''
+    const cases = Array.isArray(inputValue.argument_cases) ? inputValue.argument_cases : []
+    return {
+      observations: cases.map((entry, index) => {
+        const item = isObject(entry) && isObject(entry.arguments) ? entry.arguments : {}
+        return {
+          case: index === 0 ? 'absent' : 'null',
+          headers: deriveParameterHeader(item, argument, header),
+        }
+      }),
+    }
+  }
+  throw new RangeError(`Unsupported transport operation: ${inputValue.operation}`)
+}

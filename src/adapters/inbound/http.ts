@@ -40,8 +40,18 @@ export function handleHttp(
   seedValue: unknown,
   inputValue: unknown,
 ): unknown {
-  void seedValue
-  void inputValue
+  const input = isObject(inputValue) ? inputValue : {}
+  if (Array.isArray(input.requests)) {
+    return {
+      observations: input.requests.map((entry) => {
+        const item = isObject(entry) ? entry : {}
+        return {
+          case: typeof item.case === 'string' ? item.case : '',
+          response: handleHttp(item, seedValue, {}),
+        }
+      }),
+    }
+  }
   if (!isObject(requestValue)) throw new TypeError('HTTP request must be an object')
   const headers = headersOf(requestValue.headers)
   const origin = headers.get('origin')
