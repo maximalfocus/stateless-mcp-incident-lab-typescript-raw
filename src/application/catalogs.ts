@@ -23,8 +23,48 @@ export function listTools(): Record<string, unknown> {
   }
 }
 
+const PUBLIC_CATALOG = { resultType: 'complete', ttlMs: 60000, cacheScope: 'public' }
+
 export function primitiveResult(method: string): Record<string, unknown> | undefined {
-  return method === 'tools/list' ? listTools() : undefined
+  if (method === 'tools/list') return listTools()
+  if (method === 'resources/list') {
+    return {
+      ...PUBLIC_CATALOG,
+      resources: [
+        { uri: 'incident://runbooks/api', name: 'API runbook', mimeType: 'text/markdown' },
+        {
+          uri: 'incident://runbooks/database',
+          name: 'Database runbook',
+          mimeType: 'text/markdown',
+        },
+        {
+          uri: 'incident://topology/services',
+          name: 'Service topology',
+          mimeType: 'application/json',
+        },
+      ],
+      _meta: catalogMeta(),
+    }
+  }
+  if (method === 'resources/templates/list') {
+    return {
+      ...PUBLIC_CATALOG,
+      resourceTemplates: [
+        {
+          uriTemplate: 'incident://incidents/{incident_id}/timeline',
+          name: 'Incident timeline',
+          mimeType: 'application/json',
+        },
+        {
+          uriTemplate: 'incident://runbooks/{service_id}',
+          name: 'Service runbook',
+          mimeType: 'text/markdown',
+        },
+      ],
+      _meta: catalogMeta(),
+    }
+  }
+  return undefined
 }
 
 export function executeFunction(inputValue: unknown): unknown {
