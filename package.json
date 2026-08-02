@@ -1,0 +1,41 @@
+{
+  "name": "@maximalfocus/stateless-mcp-incident-lab-raw",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Raw HTTP and JSON-RPC implementation of the Stateless MCP Incident Lab",
+  "type": "module",
+  "bin": {
+    "incident-mcp": "dist/main.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:conformance": "tsx test/conformance/runner.ts --lane raw",
+    "start": "node dist/main.js"
+  },
+  "keywords": [
+    "mcp",
+    "json-rpc",
+    "incident-response"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  }
+}

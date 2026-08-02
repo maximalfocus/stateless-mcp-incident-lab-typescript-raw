@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  local-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: implementation
+      - uses: actions/checkout@v4
+        with:
+          repository: maximalfocus/stateless-mcp-incident-lab-conformance
+          path: external-conformance
+          token: ${{ secrets.CONFORMANCE_PAT }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: implementation/package-lock.json
+      - run: npm ci
+        working-directory: implementation
+      - run: npm run format && npm run lint && npm run typecheck && npm test && npm run build
+        working-directory: implementation
+        env:
+          CONFORMANCE_PATH: ${{ github.workspace }}/external-conformance/conformance
+
+  container-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: implementation
+      - uses: actions/checkout@v4
+        with:
+          repository: maximalfocus/stateless-mcp-incident-lab-conformance
+          path: external-conformance
+          token: ${{ secrets.CONFORMANCE_PAT }}
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build --target test --build-context conformance=external-conformance/conformance -f implementation/Dockerfile implementation

@@ -1,0 +1,5 @@
+{
+  "stack": null,
+  "implementation": "raw",
+  "conformance_path": "${CONFORMANCE_PATH:-../stateless-mcp-incident-lab-conformance/conformance}"
+}
