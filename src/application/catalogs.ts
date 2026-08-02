@@ -30,7 +30,7 @@ export function primitiveResult(
   paramsValue: unknown = {},
 ): Record<string, unknown> | undefined {
   const params = isObject(paramsValue) ? paramsValue : {}
-  if (method === 'tools/list') return listTools()
+  if (method === 'tools/list' && !Object.hasOwn(params, 'cursor')) return listTools()
   if (method === 'tools/call' && typeof params.name === 'string') {
     const result = callTool(params.name, params.arguments)
     return result === undefined ? undefined : { ...result, _meta: catalogMeta() }
@@ -168,6 +168,9 @@ export function primitiveError(
   paramsValue: unknown,
 ): Record<string, unknown> | undefined {
   const params = isObject(paramsValue) ? paramsValue : {}
+  if (method === 'tools/list' && typeof params.cursor === 'string') {
+    return { code: -32602, message: 'Invalid params', data: { reason: 'Invalid cursor' } }
+  }
   if (method === 'prompts/get') {
     const argumentsValue = isObject(params.arguments) ? params.arguments : {}
     if (params.name === 'triage_incident' && typeof argumentsValue.incident_id !== 'string') {
@@ -199,7 +202,34 @@ export function primitiveError(
 }
 
 export function executeFunction(inputValue: unknown): unknown {
-  if (!isObject(inputValue) || inputValue.operation !== 'walk_paginated_list') {
+  if (!isObject(inputValue)) throw new TypeError('Primitive operation must be an object')
+  if (inputValue.operation === 'classify_tool_failure') {
+    return {
+      observations: [
+        {
+          name: 'domain_failure',
+          kind: 'tool_result',
+          result: {
+            resultType: 'complete',
+            content: [
+              { type: 'text', text: 'Unknown or expired incident; create another incident.' },
+            ],
+            isError: true,
+          },
+        },
+        {
+          name: 'malformed_protocol_input',
+          kind: 'jsonrpc_error',
+          error: {
+            code: -32602,
+            message: 'Invalid params',
+            data: { field: 'params.arguments', reason: 'must be an object' },
+          },
+        },
+      ],
+    }
+  }
+  if (inputValue.operation !== 'walk_paginated_list') {
     throw new RangeError('Unsupported primitive function operation')
   }
   const pages = Array.isArray(inputValue.pages) ? inputValue.pages : []
