@@ -1,6 +1,7 @@
 import { primitiveError, primitiveResult } from '../../application/catalogs.js'
 import { discover } from '../../application/discover.js'
 import type { EffectStore } from '../../application/effects.js'
+import type { IncidentService } from '../../application/incidents.js'
 import { handleMrtr } from '../../application/mrtr.js'
 import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
@@ -44,6 +45,7 @@ export async function handleHttp(
   seedValue: unknown,
   inputValue: unknown,
   effectStore?: EffectStore,
+  incidentService?: IncidentService,
 ): Promise<unknown> {
   const input = isObject(inputValue) ? inputValue : {}
   const bodyLimit =
@@ -73,7 +75,7 @@ export async function handleHttp(
           const item = isObject(entry) ? entry : {}
           return {
             case: typeof item.case === 'string' ? item.case : '',
-            response: await handleHttp(item, seedValue, {}, effectStore),
+            response: await handleHttp(item, seedValue, {}, effectStore, incidentService),
           }
         }),
       ),
@@ -238,7 +240,32 @@ export async function handleHttp(
   }
   const mrtr =
     body.method === 'tools/call' ? await handleMrtr(body.params, input, effectStore) : undefined
-  if (mrtr !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
+  if (mrtr !== undefined) {
+    if (incidentService !== undefined && 'result' in mrtr) {
+      const params = isObject(body.params) ? body.params : {}
+      const args = isObject(params.arguments) ? params.arguments : {}
+      const structured = isObject(mrtr.result.structuredContent)
+        ? mrtr.result.structuredContent
+        : {}
+      if (
+        structured.status === 'EXECUTED' &&
+        typeof args.incident_id === 'string' &&
+        typeof args.remediation_id === 'string'
+      ) {
+        await incidentService.markMitigated(args.incident_id, args.remediation_id)
+      }
+    }
+    return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
+  }
+  if (body.method === 'tools/call' && incidentService !== undefined) {
+    const params = isObject(body.params) ? body.params : {}
+    if (typeof params.name === 'string') {
+      const incidentResult = await incidentService.call(params.name, params.arguments)
+      if (incidentResult !== undefined) {
+        return response(200, { jsonrpc: '2.0', id: body.id, result: incidentResult })
+      }
+    }
+  }
   const result = primitiveResult(body.method, body.params)
   if (result !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, result })
   const error = primitiveError(body.method, body.params)

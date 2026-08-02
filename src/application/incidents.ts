@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   INCIDENT_STATES,
   INCIDENT_TRANSITIONS,
@@ -6,6 +7,157 @@ import {
 } from '../domain/incident.js'
 
 type ObjectValue = Record<string, unknown>
+
+export type IncidentRecord = {
+  incidentId: string
+  status: IncidentState
+  expiresAt: string
+  remediationId?: string
+}
+
+export interface IncidentStore {
+  create(record: IncidentRecord): Promise<void>
+  get(incidentId: string): Promise<IncidentRecord | undefined>
+  save(record: IncidentRecord): Promise<void>
+  ready(): Promise<boolean>
+}
+
+export class MemoryIncidentStore implements IncidentStore {
+  readonly #records = new Map<string, IncidentRecord>()
+
+  create(record: IncidentRecord): Promise<void> {
+    this.#records.set(record.incidentId, { ...record })
+    return Promise.resolve()
+  }
+
+  get(incidentId: string): Promise<IncidentRecord | undefined> {
+    const record = this.#records.get(incidentId)
+    return Promise.resolve(record === undefined ? undefined : { ...record })
+  }
+
+  save(record: IncidentRecord): Promise<void> {
+    this.#records.set(record.incidentId, { ...record })
+    return Promise.resolve()
+  }
+
+  ready(): Promise<boolean> {
+    return Promise.resolve(true)
+  }
+}
+
+function toolResult(
+  structuredContent: ObjectValue,
+  text = JSON.stringify(structuredContent),
+): ObjectValue {
+  return {
+    resultType: 'complete',
+    content: [{ type: 'text', text }],
+    structuredContent,
+    isError: false,
+  }
+}
+
+function domainError(message: string): ObjectValue {
+  return {
+    resultType: 'complete',
+    content: [{ type: 'text', text: message }],
+    isError: true,
+  }
+}
+
+export class IncidentService {
+  readonly #store: IncidentStore
+  readonly #now: () => number
+
+  constructor(store: IncidentStore, now: () => number = Date.now) {
+    this.#store = store
+    this.#now = now
+  }
+
+  async call(name: string, argumentsValue: unknown): Promise<ObjectValue | undefined> {
+    const args = isObject(argumentsValue) ? argumentsValue : {}
+    if (name === 'create_incident') {
+      if (
+        typeof args.title !== 'string' ||
+        args.title.length === 0 ||
+        typeof args.severity !== 'string' ||
+        !Array.isArray(args.suspected_services)
+      )
+        return undefined
+      const incidentId = randomUUID()
+      const expiresAt = new Date(this.#now() + 60 * 60_000).toISOString()
+      await this.#store.create({ incidentId, status: 'OPEN', expiresAt })
+      return toolResult({ incident_id: incidentId, status: 'OPEN', expires_at: expiresAt })
+    }
+    if (
+      !['get_incident', 'run_diagnostic', 'propose_remediation', 'resolve_incident'].includes(name)
+    ) {
+      return undefined
+    }
+    const incidentId = typeof args.incident_id === 'string' ? args.incident_id : undefined
+    if (incidentId === undefined) return undefined
+    const record = await this.#store.get(incidentId)
+    if (record === undefined || Date.parse(record.expiresAt) <= this.#now()) {
+      return domainError('Unknown or expired incident; create another incident.')
+    }
+    if (name === 'get_incident') {
+      return toolResult({ incident_id: incidentId, status: record.status, related_handles: [] })
+    }
+    if (record.status === 'RESOLVED') {
+      return domainError('Incident is resolved; no further transitions are allowed.')
+    }
+    if (name === 'run_diagnostic') {
+      if (record.status === 'OPEN') {
+        record.status = 'INVESTIGATING'
+        await this.#store.save(record)
+      }
+      return toolResult({
+        diagnostic_id: randomUUID(),
+        findings: [
+          {
+            code: 'DB_LATENCY',
+            service_id: typeof args.service === 'string' ? args.service : 'api',
+            summary: 'Database dependency latency is elevated',
+          },
+        ],
+      })
+    }
+    if (name === 'propose_remediation') {
+      if (record.status !== 'INVESTIGATING')
+        return domainError('Investigate the incident before proposing remediation.')
+      const remediationId = randomUUID()
+      record.remediationId = remediationId
+      await this.#store.save(record)
+      return toolResult({
+        remediation_id: remediationId,
+        action: 'throttle_synthetic_traffic',
+        target: 'api',
+        status: 'PROPOSED',
+        effect: 'simulated',
+      })
+    }
+    if (name === 'resolve_incident') {
+      record.status = 'RESOLVED'
+      await this.#store.save(record)
+      return toolResult({ incident_id: incidentId, status: 'RESOLVED' })
+    }
+    return undefined
+  }
+
+  async markMitigated(incidentId: string, remediationId: string): Promise<boolean> {
+    const record = await this.#store.get(incidentId)
+    if (
+      record === undefined ||
+      record.remediationId !== remediationId ||
+      record.status !== 'INVESTIGATING'
+    )
+      return false
+    record.status = 'MITIGATED'
+    await this.#store.save(record)
+    return true
+  }
+}
+
 function isObject(value: unknown): value is ObjectValue {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

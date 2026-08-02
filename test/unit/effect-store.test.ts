@@ -20,6 +20,39 @@ describe('DynamoDB effect store', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it('persists incident records in the same DynamoDB table', async () => {
+    const send = vi
+      .fn<(command: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        Item: {
+          status: { S: 'INVESTIGATING' },
+          expires_at: { S: '2026-08-02T01:00:00Z' },
+          remediation_id: { S: 'r' },
+        },
+      })
+      .mockResolvedValueOnce({})
+    const store = new DynamoEffectStore('incidents', undefined, { send })
+    await store.create({
+      incidentId: 'i',
+      status: 'OPEN',
+      expiresAt: '2026-08-02T01:00:00Z',
+    })
+    await expect(store.get('i')).resolves.toEqual({
+      incidentId: 'i',
+      status: 'INVESTIGATING',
+      expiresAt: '2026-08-02T01:00:00Z',
+      remediationId: 'r',
+    })
+    await store.save({
+      incidentId: 'i',
+      status: 'MITIGATED',
+      expiresAt: '2026-08-02T01:00:00Z',
+      remediationId: 'r',
+    })
+    expect(send).toHaveBeenCalledTimes(3)
+  })
+
   it('propagates storage failures and reports readiness', async () => {
     const failure = new Error('unavailable')
     const failedSend = vi.fn<(command: unknown) => Promise<unknown>>().mockRejectedValue(failure)

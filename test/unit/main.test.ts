@@ -170,6 +170,71 @@ describe('raw entry point', () => {
     expect(await sse.text()).toContain('notifications/progress')
   })
 
+  it('persists the incident lifecycle through the public HTTP boundary', async () => {
+    const base = await launch()
+    const url = `${base}/raw/mcp`
+    const created = await rpcCall(url, 'tools/call', {
+      name: 'create_incident',
+      arguments: { title: 'latency', severity: 'high', suspected_services: ['api'] },
+    })
+    const incidentId = String(
+      (created.result as { structuredContent: { incident_id: string } }).structuredContent
+        .incident_id,
+    )
+    const opened = await rpcCall(url, 'tools/call', {
+      name: 'get_incident',
+      arguments: { incident_id: incidentId },
+    })
+    expect(opened.result).toMatchObject({ structuredContent: { status: 'OPEN' } })
+
+    await rpcCall(url, 'tools/call', {
+      name: 'run_diagnostic',
+      arguments: { incident_id: incidentId, service: 'api' },
+    })
+    const proposed = await rpcCall(url, 'tools/call', {
+      name: 'propose_remediation',
+      arguments: { incident_id: incidentId, finding: 'DB_LATENCY' },
+    })
+    const remediationId = String(
+      (proposed.result as { structuredContent: { remediation_id: string } }).structuredContent
+        .remediation_id,
+    )
+    const initial = await rpcCall(url, 'tools/call', {
+      name: 'execute_remediation',
+      arguments: { incident_id: incidentId, remediation_id: remediationId },
+    })
+    const requestState = (initial.result as { requestState: string }).requestState
+    await rpcCall(url, 'tools/call', {
+      name: 'execute_remediation',
+      arguments: { incident_id: incidentId, remediation_id: remediationId },
+      requestState,
+      inputResponses: {
+        approval: { action: 'accept', content: { decision: 'accept', confirmation: true } },
+      },
+    })
+    const mitigated = await rpcCall(url, 'tools/call', {
+      name: 'get_incident',
+      arguments: { incident_id: incidentId },
+    })
+    expect(mitigated.result).toMatchObject({ structuredContent: { status: 'MITIGATED' } })
+
+    await rpcCall(url, 'tools/call', {
+      name: 'resolve_incident',
+      arguments: { incident_id: incidentId, summary: 'resolved' },
+    })
+    const resolved = await rpcCall(url, 'tools/call', {
+      name: 'get_incident',
+      arguments: { incident_id: incidentId },
+    })
+    expect(resolved.result).toMatchObject({ structuredContent: { status: 'RESOLVED' } })
+
+    const missing = await rpcCall(url, 'tools/call', {
+      name: 'get_incident',
+      arguments: { incident_id: 'missing' },
+    })
+    expect(missing.result).toMatchObject({ isError: true })
+  })
+
   it('applies one effect under concurrent accepted HTTP retries', async () => {
     const base = await launch()
     const url = `${base}/raw/mcp`

@@ -1,11 +1,19 @@
-import { DescribeTableCommand, DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb'
+import {
+  DescribeTableCommand,
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand,
+} from '@aws-sdk/client-dynamodb'
 import type { EffectStore } from '../../application/effects.js'
+import type { IncidentRecord, IncidentStore } from '../../application/incidents.js'
 
 type DynamoClient = {
-  send(command: PutItemCommand | DescribeTableCommand): Promise<unknown>
+  send(command: unknown): Promise<unknown>
 }
 
-export class DynamoEffectStore implements EffectStore {
+type DynamoResult = { Item?: Record<string, { S?: string }> }
+
+export class DynamoEffectStore implements EffectStore, IncidentStore {
   readonly #client: DynamoClient
   readonly #tableName: string
 
@@ -46,6 +54,60 @@ export class DynamoEffectStore implements EffectStore {
       }
       throw error
     }
+  }
+
+  async create(record: IncidentRecord): Promise<void> {
+    await this.#putIncident(record, 'attribute_not_exists(PK)')
+  }
+
+  async get(incidentId: string): Promise<IncidentRecord | undefined> {
+    const result = (await this.#client.send(
+      new GetItemCommand({
+        TableName: this.#tableName,
+        Key: { PK: { S: `INCIDENT#${incidentId}` }, SK: { S: 'STATE' } },
+        ConsistentRead: true,
+      }),
+    )) as DynamoResult
+    const item = result.Item
+    const status = item?.status?.S
+    const expiresAt = item?.expires_at?.S
+    if (
+      item === undefined ||
+      !['OPEN', 'INVESTIGATING', 'MITIGATED', 'RESOLVED'].includes(status ?? '') ||
+      expiresAt === undefined
+    ) {
+      return undefined
+    }
+    const remediationId = item.remediation_id?.S
+    return {
+      incidentId,
+      status: status as IncidentRecord['status'],
+      expiresAt,
+      ...(remediationId === undefined ? {} : { remediationId }),
+    }
+  }
+
+  save(record: IncidentRecord): Promise<void> {
+    return this.#putIncident(record)
+  }
+
+  async #putIncident(record: IncidentRecord, conditionExpression?: string): Promise<void> {
+    await this.#client.send(
+      new PutItemCommand({
+        TableName: this.#tableName,
+        Item: {
+          PK: { S: `INCIDENT#${record.incidentId}` },
+          SK: { S: 'STATE' },
+          status: { S: record.status },
+          expires_at: { S: record.expiresAt },
+          expires_at_epoch: { N: String(Math.floor(Date.parse(record.expiresAt) / 1000)) },
+          ...(record.remediationId === undefined
+            ? {}
+            : { remediation_id: { S: record.remediationId } }),
+        },
+        ...(conditionExpression === undefined ? {} : { ConditionExpression: conditionExpression }),
+      }),
+    )
   }
 
   async ready(): Promise<boolean> {

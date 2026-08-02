@@ -22,7 +22,9 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
 export async function run(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   if (argv[0] === 'serve') {
     const effectStore = createEffectStoreFromEnv()
-    const server = await startRawServer(effectStore === undefined ? {} : { effectStore })
+    const server = await startRawServer(
+      effectStore === undefined ? {} : { effectStore, incidentStore: effectStore },
+    )
     const address = server.address()
     const location = typeof address === 'object' && address !== null ? address.port : 3101
     process.stdout.write(`incident-mcp raw listening on ${String(location)}\n`)

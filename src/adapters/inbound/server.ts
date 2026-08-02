@@ -1,5 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { MemoryEffectStore, type EffectStore } from '../../application/index.js'
+import {
+  IncidentService,
+  MemoryEffectStore,
+  MemoryIncidentStore,
+  type EffectStore,
+  type IncidentStore,
+} from '../../application/index.js'
 import { healthResponse } from './health.js'
 import { handleHttp } from './http.js'
 import { handleSse } from './sse.js'
@@ -11,6 +17,7 @@ export type ServerOptions = {
   port?: number
   bodyLimitBytes?: number
   effectStore?: EffectStore
+  incidentStore?: IncidentStore
   ready?: () => boolean | Promise<boolean>
 }
 
@@ -79,6 +86,8 @@ function sendSse(response: ServerResponse, observation: unknown): void {
 export function createRawServer(options: ServerOptions = {}): Server {
   const bodyLimit = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT
   const effectStore = options.effectStore ?? new MemoryEffectStore()
+  const incidentStore = options.incidentStore ?? new MemoryIncidentStore()
+  const incidentService = new IncidentService(incidentStore)
   const ready =
     options.ready ??
     (async () => {
@@ -90,7 +99,12 @@ export function createRawServer(options: ServerOptions = {}): Server {
         process.env.NODE_ENV !== 'production' ||
         options.effectStore !== undefined ||
         process.env.EFFECT_STORE === 'memory'
-      return secretReady && persistenceReady && (await effectStore.ready())
+      return (
+        secretReady &&
+        persistenceReady &&
+        (await effectStore.ready()) &&
+        (await incidentStore.ready())
+      )
     })
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     try {
@@ -131,6 +145,7 @@ export function createRawServer(options: ServerOptions = {}): Server {
               configured_limit_bytes: bodyLimit,
             },
             effectStore,
+            incidentService,
           ),
         )
         return
@@ -154,6 +169,7 @@ export function createRawServer(options: ServerOptions = {}): Server {
           null,
           { body_bytes: bodyBytes.length, configured_limit_bytes: bodyLimit },
           effectStore,
+          incidentService,
         )
         const validationValue =
           typeof validation === 'object' && validation !== null && !Array.isArray(validation)
@@ -182,6 +198,7 @@ export function createRawServer(options: ServerOptions = {}): Server {
             configured_limit_bytes: bodyLimit,
           },
           effectStore,
+          incidentService,
         ),
       )
     } catch (error) {
