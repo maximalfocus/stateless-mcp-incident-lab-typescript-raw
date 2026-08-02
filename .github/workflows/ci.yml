@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: implementation/package-lock.json
       - run: npm ci
         working-directory: implementation
-      - run: npm run format && npm run lint && npm run typecheck && npm test && npm run build
+      - run: npm run format && npm run lint && npm run typecheck && npm test && npm run build && npm run test:conformance -- --discover-only
         working-directory: implementation
         env:
           CONFORMANCE_PATH: ${{ github.workspace }}/external-conformance/conformance
@@ -43,4 +43,4 @@ jobs:
           path: external-conformance
           token: ${{ secrets.CONFORMANCE_PAT }}
       - uses: docker/setup-buildx-action@v3
-      - run: docker build --target test --build-context conformance=external-conformance/conformance -f implementation/Dockerfile implementation
+      - run: docker build --target test --build-context conformance=external-conformance -f implementation/Dockerfile implementation

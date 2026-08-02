@@ -9,10 +9,10 @@ COPY test ./test
 RUN npm run typecheck && npm run build
 
 FROM builder AS test
-COPY --from=conformance / /conformance
-ENV CONFORMANCE_PATH=/conformance
+COPY --from=conformance / /external-conformance
+ENV CONFORMANCE_PATH=/external-conformance/conformance
 RUN test -f "$CONFORMANCE_PATH/protocol/001-valid-request-shape/test.json"
-RUN npm run lint && npm test
+RUN npm run lint && npm test && npm run test:conformance -- --discover-only
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
