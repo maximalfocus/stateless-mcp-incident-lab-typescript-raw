@@ -1,3 +1,4 @@
+import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
 import { discoveryResult } from '../../protocol/version.js'
 
@@ -59,6 +60,46 @@ export function handleHttp(
       400,
       metadataError(body.id, { header: 'MCP-Protocol-Version', reason: 'required' }),
     )
+  }
+  const methodHeader = headers.get('mcp-method')
+  if (methodHeader === undefined) {
+    return response(400, metadataError(body.id, { header: 'Mcp-Method', reason: 'required' }))
+  }
+  if (methodHeader !== body.method) {
+    return response(
+      400,
+      metadataError(body.id, { header: 'Mcp-Method', expected: body.method, actual: methodHeader }),
+    )
+  }
+  const namedMethods = new Set(['tools/call', 'resources/read', 'prompts/get'])
+  if (namedMethods.has(body.method)) {
+    const params = isObject(body.params) ? body.params : {}
+    const sourceName = typeof params.name === 'string' ? params.name : params.uri
+    const nameHeader = headers.get('mcp-name')
+    if (nameHeader === undefined) {
+      return response(400, metadataError(body.id, { header: 'Mcp-Name', reason: 'required' }))
+    }
+    if (typeof sourceName === 'string' && decodeHeaderValue(nameHeader) !== sourceName) {
+      return response(
+        400,
+        metadataError(body.id, { header: 'Mcp-Name', expected: sourceName, actual: nameHeader }),
+      )
+    }
+    if (body.method === 'tools/call' && params.name === 'query_telemetry') {
+      const argumentsValue = isObject(params.arguments) ? params.arguments : {}
+      const service = argumentsValue.service
+      const serviceHeader = headers.get('mcp-param-service')
+      if (typeof service === 'string' && serviceHeader !== service) {
+        return response(
+          400,
+          metadataError(body.id, {
+            header: 'Mcp-Param-Service',
+            expected: service,
+            actual: serviceHeader,
+          }),
+        )
+      }
+    }
   }
   return response(200, { jsonrpc: '2.0', id: body.id, result: discoveryResult() })
 }
