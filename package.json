@@ -18,6 +18,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:mutation": "CONFORMANCE_PATH=${CONFORMANCE_PATH:-$PWD/../stateless-mcp-incident-lab-conformance/conformance} stryker run",
     "test:conformance": "tsx test/conformance/runner.ts --lane raw",
     "start": "node dist/main.js"
   },
@@ -29,6 +30,8 @@
   "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",

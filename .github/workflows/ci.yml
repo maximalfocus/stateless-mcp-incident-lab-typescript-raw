@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: implementation/package-lock.json
       - run: npm ci
         working-directory: implementation
-      - run: npm run format && npm run lint && npm run typecheck && npm test && npm run build && npm run test:conformance -- --discover-only
+      - run: npm run format && npm run lint && npm run typecheck && npm run test:coverage && npm run test:mutation && npm run build && npm run test:conformance
         working-directory: implementation
         env:
           CONFORMANCE_PATH: ${{ github.workspace }}/external-conformance/conformance

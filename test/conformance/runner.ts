@@ -1,7 +1,22 @@
 #!/usr/bin/env node
 import { readFile, readdir } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
+import { verifyArchitecture } from '../../scripts/verify-architecture.js'
+import { runCli } from '../../src/adapters/inbound/cli.js'
+import { handleHttp } from '../../src/adapters/inbound/http.js'
+import { verifySecurity } from '../../src/adapters/inbound/security.js'
+import { handleSse } from '../../src/adapters/inbound/sse.js'
+import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
+import { executeFunction as catalogFunction } from '../../src/application/catalogs.js'
+import { runStateMachine } from '../../src/application/incidents.js'
+import { executeFunction as cacheFunction } from '../../src/client/cache.js'
+import { executeFunction as transportFunction } from '../../src/client/http.js'
+import { executeFunction as dependencyFunction } from '../../src/dependencies/index.js'
+import { checkProperty } from '../../src/properties.js'
+import { executeFunction as protocolFunction } from '../../src/protocol/codec.js'
+import { executeFunction as securityFunction } from '../../src/protocol/validation.js'
+import { handleHttp as handleVersionHttp } from '../../src/protocol/version.js'
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 type TestMetadata = {
@@ -22,7 +37,11 @@ type Fixture = {
 }
 type Result = { specId: string; status: 'PASS' | 'FAIL' | 'SKIP'; detail?: string }
 
-const DEFAULT_CONFORMANCE = '../stateless-mcp-incident-lab-conformance/conformance'
+const IMPLEMENTATION_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const DEFAULT_CONFORMANCE = resolve(
+  IMPLEMENTATION_ROOT,
+  '../stateless-mcp-incident-lab-conformance/conformance',
+)
 const ROOT = resolve(process.env.CONFORMANCE_PATH ?? DEFAULT_CONFORMANCE)
 const ALLOW_EXTRA = '{{ALLOW_EXTRA}}'
 const PLACEHOLDERS = new Set([
@@ -174,83 +193,40 @@ async function loadFixture(dir: string): Promise<Fixture> {
   }
 }
 
-async function importCandidate(path: string): Promise<Record<string, unknown>> {
-  return (await import(pathToFileURL(resolve(path)).href)) as Record<string, unknown>
-}
-
 async function execute(fixture: Fixture): Promise<unknown> {
   const { boundary, property } = fixture.test
   if (boundary === 'lint-assertion') {
-    if (fixture.category === 'security') {
-      const module = await importCandidate('src/adapters/inbound/security.ts')
-      return (module.verifySecurity as (input: Json) => unknown)(fixture.input)
-    }
-    const module = await importCandidate('scripts/verify-architecture.ts')
-    return (module.verifyArchitecture as (expected: Json) => unknown)(fixture.expected)
+    return fixture.category === 'security'
+      ? verifySecurity(fixture.input)
+      : verifyArchitecture(fixture.expected as Parameters<typeof verifyArchitecture>[0])
   }
   if (boundary === 'http' || boundary === 'http-contract' || boundary === 'tool-call') {
-    const modulePath =
-      fixture.category === 'versioning' ? 'src/protocol/version.ts' : 'src/adapters/inbound/http.ts'
-    const module = await importCandidate(modulePath)
-    return await (module.handleHttp as (request: Json, seed: Json, input: Json) => unknown)(
-      fixture.request,
-      fixture.seed,
-      fixture.input,
-    )
+    const handler = fixture.category === 'versioning' ? handleVersionHttp : handleHttp
+    return await handler(fixture.request, fixture.seed, fixture.input)
   }
-  if (boundary === 'sse') {
-    const module = await importCandidate('src/adapters/inbound/sse.ts')
-    return await (module.handleSse as (request: Json, seed: Json, input: Json) => unknown)(
-      fixture.request,
-      fixture.seed,
-      fixture.input,
-    )
-  }
-  if (boundary === 'cli') {
-    const module = await importCandidate('src/adapters/inbound/cli.ts')
-    return await (module.runCli as (input: Json) => unknown)(fixture.input)
-  }
-  if (boundary === 'state-machine') {
-    const module = await importCandidate('src/application/incidents.ts')
-    return await (module.runStateMachine as (input: Json, seed: Json) => unknown)(
-      fixture.input,
-      fixture.seed,
-    )
-  }
+  if (boundary === 'sse') return await handleSse(fixture.request, fixture.seed, fixture.input)
+  if (boundary === 'cli') return await runCli(fixture.input)
+  if (boundary === 'state-machine') return await runStateMachine(fixture.input)
   if (boundary === 'trace-span') {
-    const module = await importCandidate('src/adapters/outbound/telemetry.ts')
-    return await (module.captureTrace as (input: Json, request: Json, seed: Json) => unknown)(
-      fixture.input,
-      fixture.request,
-      fixture.seed,
-    )
+    return await captureTrace(fixture.input, fixture.request, fixture.seed)
   }
-  if (boundary === 'property') {
-    const module = await importCandidate('src/properties.ts')
-    return await (module.checkProperty as (property: Record<string, Json>) => unknown)(
-      property ?? {},
-    )
-  }
+  if (boundary === 'property') return await checkProperty(property ?? {})
   if (
     boundary === 'function' ||
     boundary === 'workflow-assertion' ||
     boundary === 'metric-assertion'
   ) {
-    const functionModules: Record<string, string> = {
-      protocol: 'src/protocol/codec.ts',
-      transport: 'src/client/http.ts',
-      primitives: 'src/application/catalogs.ts',
-      cache: 'src/client/cache.ts',
-      security: 'src/protocol/validation.ts',
-      dependencies: 'src/dependencies/index.ts',
+    const functions: Record<string, (input: unknown) => unknown> = {
+      protocol: protocolFunction,
+      transport: transportFunction,
+      primitives: catalogFunction,
+      cache: cacheFunction,
+      security: securityFunction,
+      dependencies: dependencyFunction,
     }
-    const module = await importCandidate(
-      functionModules[fixture.category] ?? `src/${fixture.category}/index.ts`,
-    )
-    return await (module.executeFunction as (input: Json, test: TestMetadata) => unknown)(
-      fixture.input,
-      fixture.test,
-    )
+    const candidate = functions[fixture.category]
+    if (candidate === undefined) throw new Error(`No function adapter for ${fixture.category}`)
+    return await candidate(fixture.input)
   }
   throw new Error(`Unsupported boundary ${boundary}`)
 }

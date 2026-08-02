@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { matchValue } from './runner.js'
+import { main, matchValue } from './runner.js'
+
+describe('raw conformance replay', () => {
+  it('passes the complete selected lane in-process', async () => {
+    const original = process.argv
+    process.argv = ['node', 'runner.ts', '--lane', 'raw']
+    try {
+      expect(await main()).toBe(0)
+    } finally {
+      process.argv = original
+    }
+  })
+})
 
 describe('strict golden matching', () => {
   it('rejects extra fields by default', () => {
