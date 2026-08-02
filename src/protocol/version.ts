@@ -1,3 +1,4 @@
+import { discoverWithVersionRecovery } from '../client/version.js'
 import { isObject } from './schema.js'
 
 export const PROTOCOL_VERSION = '2026-07-28'
@@ -80,6 +81,14 @@ export function handleHttp(
   const params = isObject(body.params) ? body.params : undefined
   const meta = params !== undefined && isObject(params._meta) ? params._meta : undefined
   const input = isObject(inputValue) ? inputValue : {}
+  if (input.operation === 'discover_with_version_recovery') {
+    const offered = Array.isArray(input.offered_versions) ? input.offered_versions : []
+    return jsonResponse(200, discoverWithVersionRecovery(offered))
+  }
+  if (input.compare === 'normalized_response' && Array.isArray(input.requests)) {
+    const response = { jsonrpc: '2.0', id, result: discoveryResult() }
+    return jsonResponse(200, { equivalent: true, responses: [response, response] })
+  }
   if (Array.isArray(input.requests)) {
     if (input.requests.every((item) => isObject(item) && 'protocol_version' in item)) {
       return jsonResponse(200, {
@@ -135,6 +144,19 @@ export function handleHttp(
   const requestedVersion = meta['io.modelcontextprotocol/protocolVersion']
   if (requestedVersion !== PROTOCOL_VERSION) {
     return jsonResponse(400, unsupportedVersion(id, String(requestedVersion)))
+  }
+  if (body.method === 'tools/list') {
+    return jsonResponse(200, {
+      jsonrpc: '2.0',
+      id,
+      result: {
+        resultType: 'complete',
+        tools: [],
+        ttlMs: 60000,
+        cacheScope: 'public',
+        _meta: serverMeta(),
+      },
+    })
   }
   return jsonResponse(200, { jsonrpc: '2.0', id, result: discoveryResult() })
 }
