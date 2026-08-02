@@ -25,6 +25,46 @@ export function cacheKey(method: string, paramsValue: unknown): string {
   return `${method}|${JSON.stringify(canonical(isObject(paramsValue) ? paramsValue : {}))}`
 }
 
+type CacheEntry<T> = { value: T; expiresAt: number }
+
+export class ResponseCache<T> {
+  readonly #entries = new Map<string, CacheEntry<T>>()
+  readonly #now: () => number
+
+  constructor(now: () => number = Date.now) {
+    this.#now = now
+  }
+
+  get(key: string, allowStale = false): T | undefined {
+    const entry = this.#entries.get(key)
+    if (entry === undefined) return undefined
+    if (allowStale || this.#now() < entry.expiresAt) return entry.value
+    return undefined
+  }
+
+  set(key: string, value: T, ttlMs: number): void {
+    if (!Number.isFinite(ttlMs) || ttlMs < 0) return
+    this.#entries.set(key, { value, expiresAt: this.#now() + ttlMs })
+  }
+
+  clear(): void {
+    this.#entries.clear()
+  }
+}
+
+export function cacheHints(
+  resultValue: unknown,
+): { ttlMs: number; cacheScope: string } | undefined {
+  if (!isObject(resultValue) || resultValue.resultType !== 'complete') return undefined
+  if (
+    typeof resultValue.ttlMs !== 'number' ||
+    resultValue.ttlMs < 0 ||
+    !['public', 'private'].includes(String(resultValue.cacheScope))
+  )
+    return undefined
+  return { ttlMs: resultValue.ttlMs, cacheScope: String(resultValue.cacheScope) }
+}
+
 function networkWalk(pagesValue: unknown): { items: unknown[]; cursors: string[] } {
   const pages = Array.isArray(pagesValue) ? pagesValue : []
   const items: unknown[] = []

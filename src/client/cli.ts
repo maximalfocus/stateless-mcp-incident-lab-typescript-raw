@@ -1,7 +1,19 @@
+import { cacheHints, cacheKey, ResponseCache } from './cache.js'
 import { encodeHeaderValue } from '../protocol/headers.js'
 import { PROTOCOL_VERSION } from '../protocol/version.js'
 
 type JsonRpcResponse = { result?: unknown; error?: unknown }
+type RpcOptions = {
+  noCache?: boolean
+  wire?: boolean
+  warning?: (message: string) => void
+}
+
+const responseCache = new ResponseCache<JsonRpcResponse>()
+
+export function clearResponseCache(): void {
+  responseCache.clear()
+}
 
 function metadata(): Record<string, unknown> {
   return {
@@ -22,8 +34,15 @@ export async function rpcCall(
   method: string,
   paramsValue: unknown = {},
   id: string | number = 1,
+  options: RpcOptions = {},
 ): Promise<JsonRpcResponse> {
-  const params: Record<string, unknown> = { ...object(paramsValue), _meta: metadata() }
+  const sourceParams = object(paramsValue)
+  const key = `${url}|${cacheKey(method, sourceParams)}`
+  if (options.noCache !== true) {
+    const cached = responseCache.get(key)
+    if (cached !== undefined) return cached
+  }
+  const params: Record<string, unknown> = { ...sourceParams, _meta: metadata() }
   const headers: Record<string, string> = {
     Accept: 'application/json, text/event-stream',
     'Content-Type': 'application/json',
@@ -44,14 +63,32 @@ export async function rpcCall(
   ) {
     headers['Mcp-Param-Service'] = encodeHeaderValue(argumentsValue.service)
   }
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-  })
-  const body = (await response.json()) as JsonRpcResponse
-  if (!response.ok && body.error === undefined) throw new Error(`HTTP ${String(response.status)}`)
-  return body
+  if (options.wire === true) {
+    process.stderr.write(
+      `${JSON.stringify({ method, url, headers: Object.keys(headers).sort(), body: '[REDACTED]' })}\n`,
+    )
+  }
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+    })
+    const body = (await response.json()) as JsonRpcResponse
+    if (!response.ok && body.error === undefined) throw new Error(`HTTP ${String(response.status)}`)
+    const hints = cacheHints(body.result)
+    if (options.noCache !== true && hints !== undefined) responseCache.set(key, body, hints.ttlMs)
+    return body
+  } catch (error) {
+    if (options.noCache !== true) {
+      const stale = responseCache.get(key, true)
+      if (stale !== undefined) {
+        options.warning?.('Refresh failed; serving stale cached data.')
+        return stale
+      }
+    }
+    throw error
+  }
 }
 
 function parseObject(value: string | undefined): Record<string, unknown> {
@@ -68,6 +105,17 @@ function write(value: unknown, stream: NodeJS.WriteStream = process.stdout): voi
 }
 
 export async function runNetworkCli(argv: readonly string[]): Promise<number> {
+  const options: RpcOptions = {
+    noCache: argv.includes('--no-cache'),
+    wire: argv.includes('--wire'),
+    warning: (message) => process.stderr.write(`${message}\n`),
+  }
+  const call = async (
+    url: string,
+    method: string,
+    params: unknown = {},
+    id: string | number = 1,
+  ): Promise<JsonRpcResponse> => await rpcCall(url, method, params, id, options)
   const filtered = argv.filter((value) => value !== '--wire' && value !== '--no-cache')
   const [group, action, url, name, rawArguments] = filtered
   if (group === undefined || action === undefined) return 2
@@ -76,7 +124,7 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     if (group === 'demo') {
       const mode = url
       if (!['--approve', '--decline', '--cancel'].includes(mode ?? '')) return 2
-      const created = await rpcCall(action, 'tools/call', {
+      const created = await call(action, 'tools/call', {
         name: 'create_incident',
         arguments: {
           title: 'Synthetic latency incident',
@@ -85,17 +133,21 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
         },
       })
       const incidentId = String(object(object(created.result).structuredContent).incident_id)
-      const proposed = await rpcCall(action, 'tools/call', {
+      await call(action, 'tools/call', {
+        name: 'run_diagnostic',
+        arguments: { incident_id: incidentId, service: 'api' },
+      })
+      const proposed = await call(action, 'tools/call', {
         name: 'propose_remediation',
         arguments: { incident_id: incidentId, finding: 'DB_LATENCY' },
       })
       const remediationId = String(object(object(proposed.result).structuredContent).remediation_id)
-      const initial = await rpcCall(action, 'tools/call', {
+      const initial = await call(action, 'tools/call', {
         name: 'execute_remediation',
         arguments: { incident_id: incidentId, remediation_id: remediationId },
       })
       const requestState = object(initial.result).requestState
-      response = await rpcCall(action, 'tools/call', {
+      response = await call(action, 'tools/call', {
         name: 'execute_remediation',
         arguments: { incident_id: incidentId, remediation_id: remediationId },
         requestState,
@@ -106,27 +158,27 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
           },
         },
       })
-    } else if (group === 'discover') response = await rpcCall(action, 'server/discover')
+    } else if (group === 'discover') response = await call(action, 'server/discover')
     else if (url === undefined) return 2
-    else if (group === 'tools' && action === 'list') response = await rpcCall(url, 'tools/list')
+    else if (group === 'tools' && action === 'list') response = await call(url, 'tools/list')
     else if (group === 'tools' && action === 'inspect') {
-      response = await rpcCall(url, 'tools/list')
+      response = await call(url, 'tools/list')
       const toolsValue = object(response.result).tools
       const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
       write(tools.find((tool) => object(tool).name === name) ?? null)
       return 0
     } else if (group === 'tools' && action === 'call' && name !== undefined) {
-      response = await rpcCall(url, 'tools/call', { name, arguments: parseObject(rawArguments) })
+      response = await call(url, 'tools/call', { name, arguments: parseObject(rawArguments) })
     } else if (group === 'resources' && action === 'list') {
-      response = await rpcCall(url, 'resources/list')
+      response = await call(url, 'resources/list')
     } else if (group === 'resources' && action === 'templates') {
-      response = await rpcCall(url, 'resources/templates/list')
+      response = await call(url, 'resources/templates/list')
     } else if (group === 'resources' && action === 'read' && name !== undefined) {
-      response = await rpcCall(url, 'resources/read', { uri: name })
+      response = await call(url, 'resources/read', { uri: name })
     } else if (group === 'prompts' && action === 'list') {
-      response = await rpcCall(url, 'prompts/list')
+      response = await call(url, 'prompts/list')
     } else if (group === 'prompts' && action === 'get' && name !== undefined) {
-      response = await rpcCall(url, 'prompts/get', { name, arguments: parseObject(rawArguments) })
+      response = await call(url, 'prompts/get', { name, arguments: parseObject(rawArguments) })
     } else {
       process.stderr.write('Usage: incident-mcp discover <url> | <group> <action> <url> [...]\n')
       return 2

@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRawServer, startRawServer } from '../../src/adapters/inbound/index.js'
-import { rpcCall, runNetworkCli } from '../../src/client/cli.js'
+import { clearResponseCache, rpcCall, runNetworkCli } from '../../src/client/cli.js'
 import { implementation, main, run } from '../../src/main.js'
 
 const servers: ReturnType<typeof createRawServer>[] = []
@@ -168,6 +168,23 @@ describe('raw entry point', () => {
     })
     expect(sse.headers.get('content-type')).toContain('text/event-stream')
     expect(await sse.text()).toContain('notifications/progress')
+  })
+
+  it('uses cache hints and honors cache bypass in the network client', async () => {
+    clearResponseCache()
+    const base = await launch()
+    const url = `${base}/raw/mcp`
+    const realFetch = globalThis.fetch
+    let calls = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (...args) => {
+      calls += 1
+      return await realFetch(...args)
+    })
+    await rpcCall(url, 'tools/list')
+    await rpcCall(url, 'tools/list')
+    expect(calls).toBe(1)
+    await rpcCall(url, 'tools/list', {}, 2, { noCache: true })
+    expect(calls).toBe(2)
   })
 
   it('persists the incident lifecycle through the public HTTP boundary', async () => {
