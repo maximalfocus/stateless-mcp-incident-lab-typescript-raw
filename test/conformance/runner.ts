@@ -203,6 +203,7 @@ async function execute(fixture: Fixture): Promise<unknown> {
     const functionModules: Record<string, string> = {
       protocol: 'src/protocol/codec.ts',
       transport: 'src/client/http.ts',
+      primitives: 'src/application/catalogs.ts',
       cache: 'src/client/cache.ts',
       dependencies: 'src/dependencies/index.ts',
     }

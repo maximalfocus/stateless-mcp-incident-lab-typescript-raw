@@ -1,3 +1,4 @@
+import { primitiveResult } from '../../application/catalogs.js'
 import { discover } from '../../application/discover.js'
 import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
@@ -140,5 +141,6 @@ export function handleHttp(
       }
     }
   }
-  return response(200, { jsonrpc: '2.0', id: body.id, result: discover() })
+  const result = primitiveResult(body.method) ?? discover()
+  return response(200, { jsonrpc: '2.0', id: body.id, result })
 }
