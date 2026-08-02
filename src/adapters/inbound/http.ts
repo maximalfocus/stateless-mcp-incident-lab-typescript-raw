@@ -1,5 +1,6 @@
 import { primitiveError, primitiveResult } from '../../application/catalogs.js'
 import { discover } from '../../application/discover.js'
+import { handleMrtr } from '../../application/mrtr.js'
 import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
 
@@ -141,6 +142,8 @@ export function handleHttp(
       }
     }
   }
+  const mrtr = body.method === 'tools/call' ? handleMrtr(body.params, input) : undefined
+  if (mrtr !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
   const result = primitiveResult(body.method, body.params)
   if (result !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, result })
   const error = primitiveError(body.method, body.params)
