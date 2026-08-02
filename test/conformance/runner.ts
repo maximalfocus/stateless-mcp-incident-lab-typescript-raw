@@ -137,7 +137,9 @@ async function execute(fixture: Fixture): Promise<unknown> {
     return (module.verifyArchitecture as (expected: Json) => unknown)(fixture.expected)
   }
   if (boundary === 'http' || boundary === 'http-contract' || boundary === 'tool-call') {
-    const module = await importCandidate('src/adapters/inbound/http.ts')
+    const modulePath =
+      fixture.category === 'versioning' ? 'src/protocol/version.ts' : 'src/adapters/inbound/http.ts'
+    const module = await importCandidate(modulePath)
     return await (module.handleHttp as (request: Json, seed: Json, input: Json) => unknown)(
       fixture.request,
       fixture.seed,
