@@ -181,6 +181,10 @@ async function importCandidate(path: string): Promise<Record<string, unknown>> {
 async function execute(fixture: Fixture): Promise<unknown> {
   const { boundary, property } = fixture.test
   if (boundary === 'lint-assertion') {
+    if (fixture.category === 'security') {
+      const module = await importCandidate('src/adapters/inbound/security.ts')
+      return (module.verifySecurity as (input: Json) => unknown)(fixture.input)
+    }
     const module = await importCandidate('scripts/verify-architecture.ts')
     return (module.verifyArchitecture as (expected: Json) => unknown)(fixture.expected)
   }
@@ -237,6 +241,7 @@ async function execute(fixture: Fixture): Promise<unknown> {
       transport: 'src/client/http.ts',
       primitives: 'src/application/catalogs.ts',
       cache: 'src/client/cache.ts',
+      security: 'src/protocol/validation.ts',
       dependencies: 'src/dependencies/index.ts',
     }
     const module = await importCandidate(

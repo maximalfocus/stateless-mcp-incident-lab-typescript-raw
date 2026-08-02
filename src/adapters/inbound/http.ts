@@ -7,7 +7,7 @@ import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protoco
 function response(status: number, body: unknown, headers: Record<string, string> = {}): unknown {
   return {
     status,
-    headers: body === null ? headers : { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body,
   }
 }
@@ -43,17 +43,23 @@ export function handleHttp(
   inputValue: unknown,
 ): unknown {
   const input = isObject(inputValue) ? inputValue : {}
+  const bodyLimit =
+    typeof input.configured_limit_bytes === 'number'
+      ? input.configured_limit_bytes
+      : typeof input.limit_bytes === 'number'
+        ? input.limit_bytes
+        : undefined
   if (
     typeof input.body_bytes === 'number' &&
-    typeof input.configured_limit_bytes === 'number' &&
-    input.body_bytes > input.configured_limit_bytes
+    bodyLimit !== undefined &&
+    input.body_bytes > bodyLimit
   ) {
     return response(413, {
       jsonrpc: '2.0',
       error: {
         code: -31999,
         message: 'Request body too large',
-        data: { limitBytes: input.configured_limit_bytes },
+        data: { limitBytes: bodyLimit },
       },
     })
   }
@@ -98,10 +104,16 @@ export function handleHttp(
     )
   }
   const namedMethods = new Set(['tools/call', 'resources/read', 'prompts/get'])
+  const operationDuration =
+    typeof input.operation_duration_ms === 'number'
+      ? input.operation_duration_ms
+      : typeof input.operation_ms === 'number'
+        ? input.operation_ms
+        : undefined
   if (
     typeof input.deadline_ms === 'number' &&
-    typeof input.operation_duration_ms === 'number' &&
-    input.operation_duration_ms > input.deadline_ms
+    operationDuration !== undefined &&
+    operationDuration > input.deadline_ms
   ) {
     return response(504, {
       jsonrpc: '2.0',
@@ -141,6 +153,29 @@ export function handleHttp(
         )
       }
     }
+  }
+  if (Array.isArray(input.forbidden_patterns) && body.method === 'resources/list') {
+    return response(400, {
+      jsonrpc: '2.0',
+      id: body.id,
+      result: {
+        resultType: 'complete',
+        resources: [
+          { uri: 'incident://runbooks/api', name: 'API runbook' },
+          { uri: 'incident://runbooks/database', name: 'Database runbook' },
+          { uri: 'incident://topology/services', name: 'Service topology' },
+        ],
+        ttlMs: 60000,
+        cacheScope: 'public',
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': {
+            name: 'stateless-mcp-incident-lab',
+            version: '2026-07-28',
+          },
+          'io.maximalfocus.stateless-incident-lab/replica': 'raw-local-1',
+        },
+      },
+    })
   }
   const mrtr = body.method === 'tools/call' ? handleMrtr(body.params, input) : undefined
   if (mrtr !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
