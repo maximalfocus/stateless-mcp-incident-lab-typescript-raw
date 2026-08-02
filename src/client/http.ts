@@ -1,19 +1,6 @@
-const SENTINEL = /^=\?base64\?([A-Za-z0-9+/]+={0,2})\?=$/
-const SAFE_HEADER_VALUE = /^[\x20-\x7e]*$/
+import { decodeHeaderValue, encodeHeaderValue } from '../protocol/headers.js'
 
-export function encodeHeaderValue(value: string): string {
-  return SAFE_HEADER_VALUE.test(value)
-    ? value
-    : `=?base64?${Buffer.from(value, 'utf8').toString('base64')}?=`
-}
-
-export function decodeHeaderValue(value: string): string {
-  const match = SENTINEL.exec(value)
-  if (match === null) return value
-  const encoded = match[1]
-  if (encoded === undefined) throw new TypeError('Malformed Base64 sentinel')
-  return Buffer.from(encoded, 'base64').toString('utf8')
-}
+export { decodeHeaderValue, encodeHeaderValue } from '../protocol/headers.js'
 
 export function deriveParameterHeader(
   argumentsValue: Record<string, unknown>,
