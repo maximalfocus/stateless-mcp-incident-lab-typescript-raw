@@ -141,6 +141,6 @@ export function handleHttp(
       }
     }
   }
-  const result = primitiveResult(body.method) ?? discover()
+  const result = primitiveResult(body.method, body.params) ?? discover()
   return response(200, { jsonrpc: '2.0', id: body.id, result })
 }

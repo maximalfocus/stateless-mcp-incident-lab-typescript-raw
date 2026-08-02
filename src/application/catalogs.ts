@@ -25,7 +25,11 @@ export function listTools(): Record<string, unknown> {
 
 const PUBLIC_CATALOG = { resultType: 'complete', ttlMs: 60000, cacheScope: 'public' }
 
-export function primitiveResult(method: string): Record<string, unknown> | undefined {
+export function primitiveResult(
+  method: string,
+  paramsValue: unknown = {},
+): Record<string, unknown> | undefined {
+  const params = isObject(paramsValue) ? paramsValue : {}
   if (method === 'tools/list') return listTools()
   if (method === 'resources/list') {
     return {
@@ -44,6 +48,40 @@ export function primitiveResult(method: string): Record<string, unknown> | undef
         },
       ],
       _meta: catalogMeta(),
+    }
+  }
+  if (method === 'resources/read' && typeof params.uri === 'string') {
+    const publicResources: Record<string, Record<string, unknown>> = {
+      'incident://topology/services': {
+        uri: 'incident://topology/services',
+        mimeType: 'application/json',
+        text: '{"services":[{"service_id":"api","dependencies":["database"],"health":"degraded","region":"ap-southeast-1"},{"service_id":"database","dependencies":[],"health":"healthy","region":"ap-southeast-1"}]}',
+      },
+      'incident://runbooks/api': {
+        uri: 'incident://runbooks/api',
+        mimeType: 'text/markdown',
+        text: '# API runbook\n\nInspect latency and downstream database health.',
+        _meta: { revision: 1, updated_at: '2026-08-02T00:00:00Z' },
+      },
+    }
+    const publicContent = publicResources[params.uri]
+    if (publicContent !== undefined) {
+      return { ...PUBLIC_CATALOG, contents: [publicContent], _meta: catalogMeta() }
+    }
+    if (params.uri === 'incident://incidents/INCIDENT-OPEN/timeline') {
+      return {
+        resultType: 'complete',
+        contents: [
+          {
+            uri: params.uri,
+            mimeType: 'application/json',
+            text: '{"events":[{"service_id":"api","signal":"latency","severity":"high","timestamp":"2026-08-02T00:00:00Z"}]}',
+          },
+        ],
+        ttlMs: 1000,
+        cacheScope: 'private',
+        _meta: catalogMeta(),
+      }
     }
   }
   if (method === 'resources/templates/list') {
