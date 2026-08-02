@@ -119,6 +119,25 @@ export function primitiveResult(
       }
     }
   }
+  if (method === 'prompts/get' && params.name === 'review_remediation') {
+    const args = isObject(params.arguments) ? params.arguments : {}
+    if (typeof args.incident_id === 'string' && typeof args.remediation_id === 'string') {
+      return {
+        resultType: 'complete',
+        description: 'Review a simulated remediation',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `Review evidence for remediation ${args.remediation_id} on incident ${args.incident_id} before approval.`,
+            },
+          },
+        ],
+        _meta: catalogMeta(),
+      }
+    }
+  }
   if (method === 'resources/templates/list') {
     return {
       ...PUBLIC_CATALOG,
@@ -145,6 +164,26 @@ export function primitiveError(
   paramsValue: unknown,
 ): Record<string, unknown> | undefined {
   const params = isObject(paramsValue) ? paramsValue : {}
+  if (method === 'prompts/get') {
+    const argumentsValue = isObject(params.arguments) ? params.arguments : {}
+    if (params.name === 'triage_incident' && typeof argumentsValue.incident_id !== 'string') {
+      return {
+        code: -32602,
+        message: 'Invalid params',
+        data: { reason: 'Missing required argument', argument: 'incident_id' },
+      }
+    }
+    if (
+      typeof params.name === 'string' &&
+      !['triage_incident', 'review_remediation'].includes(params.name)
+    ) {
+      return {
+        code: -32602,
+        message: 'Invalid params',
+        data: { reason: 'Unknown prompt', name: params.name },
+      }
+    }
+  }
   if (method === 'resources/read' && typeof params.uri === 'string') {
     return {
       code: -32602,
