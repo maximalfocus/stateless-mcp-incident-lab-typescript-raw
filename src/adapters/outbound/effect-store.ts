@@ -57,17 +57,18 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
     }
   }
 
-  async create(record: IncidentRecord): Promise<void> {
-    await this.#putIncident(record, 'attribute_not_exists(PK)')
+  async create(record: IncidentRecord, signal?: AbortSignal): Promise<void> {
+    await this.#putIncident(record, 'attribute_not_exists(PK)', undefined, signal)
   }
 
-  async get(incidentId: string): Promise<IncidentRecord | undefined> {
+  async get(incidentId: string, signal?: AbortSignal): Promise<IncidentRecord | undefined> {
     const result = (await this.#client.send(
       new GetItemCommand({
         TableName: this.#tableName,
         Key: { PK: { S: `INCIDENT#${incidentId}` }, SK: { S: 'STATE' } },
         ConsistentRead: true,
       }),
+      signal === undefined ? undefined : { abortSignal: signal },
     )) as DynamoResult
     const item = result.Item
     const status = item?.status?.S
@@ -88,11 +89,16 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
     }
   }
 
-  save(record: IncidentRecord, expectedStatus?: IncidentRecord['status']): Promise<void> {
+  save(
+    record: IncidentRecord,
+    expectedStatus?: IncidentRecord['status'],
+    signal?: AbortSignal,
+  ): Promise<void> {
     return this.#putIncident(
       record,
       expectedStatus === undefined ? undefined : '#status = :expectedStatus',
       expectedStatus,
+      signal,
     )
   }
 
@@ -100,6 +106,7 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
     record: IncidentRecord,
     conditionExpression?: string,
     expectedStatus?: IncidentRecord['status'],
+    signal?: AbortSignal,
   ): Promise<void> {
     await this.#client.send(
       new PutItemCommand({
@@ -126,6 +133,7 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
                   }),
             }),
       }),
+      signal === undefined ? undefined : { abortSignal: signal },
     )
   }
 

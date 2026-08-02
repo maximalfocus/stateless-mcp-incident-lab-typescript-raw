@@ -172,6 +172,30 @@ describe('runtime incident service', () => {
     await expect(service.readTimeline(uri)).resolves.toEqual(expired)
   })
 
+  it('does not mutate incident storage after cancellation', async () => {
+    const store = new MemoryIncidentStore()
+    const controller = new AbortController()
+    controller.abort()
+    const record = { incidentId: 'i', status: 'OPEN' as const, expiresAt: '2026-08-02T01:00:00Z' }
+    await expect(store.create(record, controller.signal)).rejects.toThrow('Operation aborted')
+    await expect(store.get('i', controller.signal)).rejects.toThrow('Operation aborted')
+    await expect(store.save(record, undefined, controller.signal)).rejects.toThrow(
+      'Operation aborted',
+    )
+    await expect(
+      new IncidentService(store).call(
+        'create_incident',
+        {
+          title: 'x',
+          severity: 'high',
+          suspected_services: [],
+        },
+        controller.signal,
+      ),
+    ).rejects.toThrow('Operation aborted')
+    await expect(store.get('i')).resolves.toBeUndefined()
+  })
+
   it('rejects operations without handles or unsupported names', async () => {
     const service = new IncidentService(new MemoryIncidentStore(), () => 0)
     await expect(service.call('get_incident', {})).resolves.toBeUndefined()

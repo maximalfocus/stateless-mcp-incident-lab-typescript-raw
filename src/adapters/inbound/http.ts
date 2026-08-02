@@ -255,7 +255,7 @@ export async function handleHttp(
         typeof args.incident_id === 'string' &&
         typeof args.remediation_id === 'string'
       ) {
-        await incidentService.markMitigated(args.incident_id, args.remediation_id)
+        await incidentService.markMitigated(args.incident_id, args.remediation_id, signal)
       }
     }
     return response(200, { jsonrpc: '2.0', id: body.id, ...mrtr })
@@ -263,7 +263,7 @@ export async function handleHttp(
   if (body.method === 'tools/call' && incidentService !== undefined) {
     const params = isObject(body.params) ? body.params : {}
     if (typeof params.name === 'string') {
-      const incidentResult = await incidentService.call(params.name, params.arguments)
+      const incidentResult = await incidentService.call(params.name, params.arguments, signal)
       if (incidentResult !== undefined) {
         return response(200, {
           jsonrpc: '2.0',
@@ -276,7 +276,7 @@ export async function handleHttp(
   if (body.method === 'resources/read' && incidentService !== undefined) {
     const params = isObject(body.params) ? body.params : {}
     if (typeof params.uri === 'string') {
-      const timeline = await incidentService.readTimeline(params.uri)
+      const timeline = await incidentService.readTimeline(params.uri, signal)
       if (timeline !== undefined) {
         return response(200, {
           jsonrpc: '2.0',

@@ -223,7 +223,7 @@ export function createRawServer(options: ServerOptions = {}): Server {
           Buffer.byteLength(process.env.MCP_REQUEST_STATE_SECRET) >= 32)
       const persistenceReady =
         process.env.NODE_ENV !== 'production' ||
-        options.effectStore !== undefined ||
+        (options.effectStore !== undefined && options.incidentStore !== undefined) ||
         process.env.EFFECT_STORE === 'memory'
       return (
         secretReady &&
