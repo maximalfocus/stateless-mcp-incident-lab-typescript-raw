@@ -84,6 +84,41 @@ export function primitiveResult(
       }
     }
   }
+  if (method === 'prompts/list') {
+    return {
+      ...PUBLIC_CATALOG,
+      prompts: [
+        { name: 'triage_incident', arguments: [{ name: 'incident_id', required: true }] },
+        {
+          name: 'review_remediation',
+          arguments: [
+            { name: 'incident_id', required: true },
+            { name: 'remediation_id', required: true },
+          ],
+        },
+      ],
+      _meta: catalogMeta(),
+    }
+  }
+  if (method === 'prompts/get' && params.name === 'triage_incident') {
+    const argumentsValue = isObject(params.arguments) ? params.arguments : {}
+    if (typeof argumentsValue.incident_id === 'string') {
+      return {
+        resultType: 'complete',
+        description: 'Triage a synthetic incident',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `Investigate incident ${argumentsValue.incident_id} using incident://incidents/${argumentsValue.incident_id}/timeline.`,
+            },
+          },
+        ],
+        _meta: catalogMeta(),
+      }
+    }
+  }
   if (method === 'resources/templates/list') {
     return {
       ...PUBLIC_CATALOG,
@@ -100,6 +135,21 @@ export function primitiveResult(
         },
       ],
       _meta: catalogMeta(),
+    }
+  }
+  return undefined
+}
+
+export function primitiveError(
+  method: string,
+  paramsValue: unknown,
+): Record<string, unknown> | undefined {
+  const params = isObject(paramsValue) ? paramsValue : {}
+  if (method === 'resources/read' && typeof params.uri === 'string') {
+    return {
+      code: -32602,
+      message: 'Invalid params',
+      data: { reason: 'Unknown resource', uri: params.uri },
     }
   }
   return undefined
