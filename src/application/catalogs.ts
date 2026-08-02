@@ -1,4 +1,4 @@
-import { TOOLS } from './tools.js'
+import { callTool, TOOLS } from './tools.js'
 
 const SERVER_INFO = { name: 'stateless-mcp-incident-lab', version: '2026-07-28' }
 
@@ -31,6 +31,10 @@ export function primitiveResult(
 ): Record<string, unknown> | undefined {
   const params = isObject(paramsValue) ? paramsValue : {}
   if (method === 'tools/list') return listTools()
+  if (method === 'tools/call' && typeof params.name === 'string') {
+    const result = callTool(params.name, params.arguments)
+    return result === undefined ? undefined : { ...result, _meta: catalogMeta() }
+  }
   if (method === 'resources/list') {
     return {
       ...PUBLIC_CATALOG,

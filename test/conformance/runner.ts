@@ -36,6 +36,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function placeholderTemplate(expected: string): RegExp | undefined {
+  if (!expected.includes('{{')) return undefined
+  const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = escaped.replace(/\\\{\\\{(?:ANY_STRING|GENERATED_ID|TIMESTAMP)\\\}\\\}/g, '[^"]+')
+  return pattern === escaped ? undefined : new RegExp(`^${pattern}$`)
+}
+
 export function matchValue(expected: unknown, actual: unknown, path = '$'): string[] {
   if (typeof expected === 'string' && PLACEHOLDERS.has(expected)) {
     if (expected === '{{ANY_STRING}}' && typeof actual !== 'string')
@@ -50,6 +57,12 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
       return [`${path}: expected ISO timestamp`]
     }
     return []
+  }
+  if (typeof expected === 'string' && typeof actual === 'string') {
+    const template = placeholderTemplate(expected)
+    if (template !== undefined) {
+      return template.test(actual) ? [] : [`${path}: placeholder template mismatch`]
+    }
   }
   if (expected === null || typeof expected !== 'object') {
     return Object.is(expected, actual)

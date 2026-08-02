@@ -13,6 +13,15 @@ describe('strict golden matching', () => {
     )
   })
 
+  it('matches placeholders embedded in serialized outputs', () => {
+    expect(
+      matchValue(
+        '{"id":"{{GENERATED_ID}}","at":"{{TIMESTAMP}}"}',
+        '{"id":"incident-1","at":"2026-08-02T00:00:00Z"}',
+      ),
+    ).toEqual([])
+  })
+
   it('enforces placeholder types', () => {
     expect(matchValue('{{ANY_STRING}}', 42)).not.toEqual([])
     expect(matchValue('{{ANY_STRING}}', 'replica-a')).toEqual([])

@@ -152,3 +152,53 @@ export const TOOLS: JsonObject[] = [
     ),
   },
 ]
+
+function toolResult(structuredContent: JsonObject): JsonObject {
+  return {
+    resultType: 'complete',
+    content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+    structuredContent,
+    isError: false,
+  }
+}
+
+export function callTool(name: string, argumentsValue: unknown): JsonObject | undefined {
+  const args =
+    typeof argumentsValue === 'object' && argumentsValue !== null && !Array.isArray(argumentsValue)
+      ? (argumentsValue as JsonObject)
+      : {}
+  if (name === 'create_incident') {
+    return toolResult({
+      incident_id: '00000000-0000-4000-8000-000000000001',
+      status: 'OPEN',
+      expires_at: '2026-08-02T01:00:00Z',
+    })
+  }
+  if (name === 'query_telemetry') {
+    return toolResult({
+      events: [
+        {
+          service_id: typeof args.service === 'string' ? args.service : 'api',
+          timestamp: '2026-08-02T00:00:00Z',
+          signal: typeof args.signal === 'string' ? args.signal : 'latency',
+          severity: 'high',
+          message: 'p95 latency elevated',
+          attributes: { p95_ms: 900 },
+        },
+      ],
+    })
+  }
+  if (name === 'run_diagnostic') {
+    return toolResult({
+      diagnostic_id: 'DIAGNOSTIC-001',
+      findings: [
+        {
+          code: 'DB_LATENCY',
+          service_id: typeof args.service === 'string' ? args.service : 'api',
+          summary: 'Database dependency latency is elevated',
+        },
+      ],
+    })
+  }
+  return undefined
+}
