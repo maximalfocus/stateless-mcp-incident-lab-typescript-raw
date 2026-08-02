@@ -182,7 +182,14 @@ async function execute(fixture: Fixture): Promise<unknown> {
     boundary === 'workflow-assertion' ||
     boundary === 'metric-assertion'
   ) {
-    const module = await importCandidate(`src/${fixture.category}/index.ts`)
+    const functionModules: Record<string, string> = {
+      protocol: 'src/protocol/codec.ts',
+      cache: 'src/client/cache.ts',
+      dependencies: 'src/dependencies/index.ts',
+    }
+    const module = await importCandidate(
+      functionModules[fixture.category] ?? `src/${fixture.category}/index.ts`,
+    )
     return await (module.executeFunction as (input: Json, test: TestMetadata) => unknown)(
       fixture.input,
       fixture.test,
