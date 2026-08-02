@@ -26,6 +26,17 @@ describe('strict golden matching', () => {
     ).toEqual([])
   })
 
+  it('enforces absent metadata errors without treating the directive as output', () => {
+    const expected = {
+      response: { '{{ALLOW_EXTRA}}': true },
+      metadata_error_absent: -32020,
+    }
+    expect(matchValue(expected, { response: { status: 200 } })).toEqual([])
+    expect(matchValue(expected, { response: { body: { error: { code: -32020 } } } })).not.toEqual(
+      [],
+    )
+  })
+
   it('enforces forbidden headers without treating the directive as output', () => {
     const expected = {
       headers: { '{{ALLOW_EXTRA}}': true },

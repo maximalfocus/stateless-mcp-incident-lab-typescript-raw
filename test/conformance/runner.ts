@@ -71,6 +71,12 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
   const errors: string[] = []
   for (const [key, value] of Object.entries(expectedRecord)) {
     if (key === ALLOW_EXTRA || key === 'assertions') continue
+    if (key === 'metadata_error_absent' && typeof value === 'number') {
+      if (JSON.stringify(actual).includes(`"code":${String(value)}`)) {
+        errors.push(`${path}: forbidden metadata error ${String(value)}`)
+      }
+      continue
+    }
     if (key === 'forbidden_headers' && Array.isArray(value)) {
       const headers = isRecord(actual.headers) ? actual.headers : {}
       const present = new Set(Object.keys(headers).map((name) => name.toLowerCase()))
@@ -196,6 +202,7 @@ async function execute(fixture: Fixture): Promise<unknown> {
   ) {
     const functionModules: Record<string, string> = {
       protocol: 'src/protocol/codec.ts',
+      transport: 'src/client/http.ts',
       cache: 'src/client/cache.ts',
       dependencies: 'src/dependencies/index.ts',
     }
