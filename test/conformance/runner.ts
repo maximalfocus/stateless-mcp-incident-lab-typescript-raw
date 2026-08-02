@@ -84,6 +84,25 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
   const errors: string[] = []
   for (const [key, value] of Object.entries(expectedRecord)) {
     if (key === ALLOW_EXTRA || key === 'assertions') continue
+    if (key === 'final_response_count' && typeof value === 'number') {
+      const events = Array.isArray(actual.events) ? actual.events : []
+      const count = events.filter((event) => {
+        if (!isRecord(event) || !isRecord(event.data)) return false
+        return 'id' in event.data && ('result' in event.data || 'error' in event.data)
+      }).length
+      if (count !== value)
+        errors.push(`${path}.${key}: expected ${String(value)}, got ${String(count)}`)
+      continue
+    }
+    if (key === 'events_after_final' && Array.isArray(value)) {
+      const events = Array.isArray(actual.events) ? actual.events : []
+      const finalIndex = events.findIndex(
+        (event) => isRecord(event) && isRecord(event.data) && 'id' in event.data,
+      )
+      const trailing = finalIndex < 0 ? events : events.slice(finalIndex + 1)
+      errors.push(...matchValue(value, trailing, `${path}.${key}`))
+      continue
+    }
     if (key === 'metadata_error_absent' && typeof value === 'number') {
       if (JSON.stringify(actual).includes(`"code":${String(value)}`)) {
         errors.push(`${path}: forbidden metadata error ${String(value)}`)

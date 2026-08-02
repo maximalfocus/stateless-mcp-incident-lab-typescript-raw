@@ -35,6 +35,28 @@ describe('strict golden matching', () => {
     ).toEqual([])
   })
 
+  it('derives SSE final-count and trailing-event assertions', () => {
+    const actual = {
+      events: [
+        { event: 'message', data: { method: 'notifications/progress' } },
+        { event: 'message', data: { id: 1, result: {} } },
+      ],
+    }
+    expect(
+      matchValue(
+        {
+          events: [
+            { event: 'message', data: { method: 'notifications/progress' } },
+            { event: 'message', data: { id: 1, result: {} } },
+          ],
+          final_response_count: 1,
+          events_after_final: [],
+        },
+        actual,
+      ),
+    ).toEqual([])
+  })
+
   it('enforces absent metadata errors without treating the directive as output', () => {
     const expected = {
       response: { '{{ALLOW_EXTRA}}': true },
