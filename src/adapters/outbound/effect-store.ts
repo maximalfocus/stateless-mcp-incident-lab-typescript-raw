@@ -8,7 +8,7 @@ import type { EffectStore } from '../../application/effects.js'
 import type { IncidentRecord, IncidentStore } from '../../application/incidents.js'
 
 type DynamoClient = {
-  send(command: unknown): Promise<unknown>
+  send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>
 }
 
 type DynamoResult = { Item?: Record<string, { S?: string }> }
@@ -28,7 +28,7 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
       })
   }
 
-  async claim(remediationId: string): Promise<boolean> {
+  async claim(remediationId: string, signal?: AbortSignal): Promise<boolean> {
     try {
       await this.#client.send(
         new PutItemCommand({
@@ -41,6 +41,7 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
           },
           ConditionExpression: 'attribute_not_exists(PK)',
         }),
+        signal === undefined ? undefined : { abortSignal: signal },
       )
       return true
     } catch (error) {
@@ -87,11 +88,19 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
     }
   }
 
-  save(record: IncidentRecord): Promise<void> {
-    return this.#putIncident(record)
+  save(record: IncidentRecord, expectedStatus?: IncidentRecord['status']): Promise<void> {
+    return this.#putIncident(
+      record,
+      expectedStatus === undefined ? undefined : '#status = :expectedStatus',
+      expectedStatus,
+    )
   }
 
-  async #putIncident(record: IncidentRecord, conditionExpression?: string): Promise<void> {
+  async #putIncident(
+    record: IncidentRecord,
+    conditionExpression?: string,
+    expectedStatus?: IncidentRecord['status'],
+  ): Promise<void> {
     await this.#client.send(
       new PutItemCommand({
         TableName: this.#tableName,
@@ -105,7 +114,17 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
             ? {}
             : { remediation_id: { S: record.remediationId } }),
         },
-        ...(conditionExpression === undefined ? {} : { ConditionExpression: conditionExpression }),
+        ...(conditionExpression === undefined
+          ? {}
+          : {
+              ConditionExpression: conditionExpression,
+              ...(expectedStatus === undefined
+                ? {}
+                : {
+                    ExpressionAttributeNames: { '#status': 'status' },
+                    ExpressionAttributeValues: { ':expectedStatus': { S: expectedStatus } },
+                  }),
+            }),
       }),
     )
   }

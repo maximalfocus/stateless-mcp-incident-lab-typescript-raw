@@ -20,6 +20,18 @@ export function handleSse(requestValue: unknown, seedValue: unknown, inputValue:
   }
   const input = isObject(inputValue) ? inputValue : {}
   let events = diagnosticEvents(body.id, token)
+  if (isObject(input.final_result)) {
+    const final = events.at(-1)
+    if (final !== undefined) {
+      events = [
+        ...events.slice(0, -1),
+        {
+          ...final,
+          data: { jsonrpc: '2.0', id: body.id, result: input.final_result },
+        },
+      ]
+    }
+  }
   const output: Record<string, unknown> = {
     headers: { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' },
     events,

@@ -42,7 +42,10 @@ export async function rpcCall(
     const cached = responseCache.get(key)
     if (cached !== undefined) return cached
   }
-  const params: Record<string, unknown> = { ...sourceParams, _meta: metadata() }
+  const params: Record<string, unknown> = {
+    ...sourceParams,
+    _meta: { ...object(sourceParams._meta), ...metadata() },
+  }
   const headers: Record<string, string> = {
     Accept: 'application/json, text/event-stream',
     'Content-Type': 'application/json',

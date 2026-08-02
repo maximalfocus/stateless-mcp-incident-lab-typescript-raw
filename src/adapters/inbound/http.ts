@@ -1,4 +1,4 @@
-import { primitiveError, primitiveResult } from '../../application/catalogs.js'
+import { catalogMeta, primitiveError, primitiveResult } from '../../application/catalogs.js'
 import { discover } from '../../application/discover.js'
 import type { EffectStore } from '../../application/effects.js'
 import type { IncidentService } from '../../application/incidents.js'
@@ -46,6 +46,7 @@ export async function handleHttp(
   inputValue: unknown,
   effectStore?: EffectStore,
   incidentService?: IncidentService,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const input = isObject(inputValue) ? inputValue : {}
   const bodyLimit =
@@ -75,7 +76,7 @@ export async function handleHttp(
           const item = isObject(entry) ? entry : {}
           return {
             case: typeof item.case === 'string' ? item.case : '',
-            response: await handleHttp(item, seedValue, {}, effectStore, incidentService),
+            response: await handleHttp(item, seedValue, {}, effectStore, incidentService, signal),
           }
         }),
       ),
@@ -239,7 +240,9 @@ export async function handleHttp(
     })
   }
   const mrtr =
-    body.method === 'tools/call' ? await handleMrtr(body.params, input, effectStore) : undefined
+    body.method === 'tools/call'
+      ? await handleMrtr(body.params, input, effectStore, signal)
+      : undefined
   if (mrtr !== undefined) {
     if (incidentService !== undefined && 'result' in mrtr) {
       const params = isObject(body.params) ? body.params : {}
@@ -262,7 +265,24 @@ export async function handleHttp(
     if (typeof params.name === 'string') {
       const incidentResult = await incidentService.call(params.name, params.arguments)
       if (incidentResult !== undefined) {
-        return response(200, { jsonrpc: '2.0', id: body.id, result: incidentResult })
+        return response(200, {
+          jsonrpc: '2.0',
+          id: body.id,
+          result: { ...incidentResult, _meta: catalogMeta() },
+        })
+      }
+    }
+  }
+  if (body.method === 'resources/read' && incidentService !== undefined) {
+    const params = isObject(body.params) ? body.params : {}
+    if (typeof params.uri === 'string') {
+      const timeline = await incidentService.readTimeline(params.uri)
+      if (timeline !== undefined) {
+        return response(200, {
+          jsonrpc: '2.0',
+          id: body.id,
+          result: { ...timeline, _meta: catalogMeta() },
+        })
       }
     }
   }

@@ -65,9 +65,9 @@ docker build --target test \
   -t incident-mcp-raw-test .
 ```
 
-## Peer-review blockers
+## Runtime behavior
 
-The public HTTP/CLI runtime is runnable and uses signed MRTR state plus conditional DynamoDB effect claims, but the current tree is **not yet a complete PRD implementation**. The in-process cache, incident-state, SSE fault/cancellation, deadline, and telemetry modules are exercised by the raw conformance runner but are not all wired into the production server/client path. In particular, ordinary incident lifecycle records are not persisted, CLI response caching is not active, SSE work is canned rather than disconnect-cancellable, and request deadlines/telemetry are not enforced by the live server. These are in-scope implementation blockers, not accepted deployment residuals.
+The public HTTP/CLI path uses the same application modules exercised by conformance. Incident lifecycle records and conditional remediation claims share the configured DynamoDB table in production; development uses in-memory stores. The CLI applies MCP cache hints in-process, supports explicit bypass, and serves stale entries only after refresh failure with a warning. Diagnostic SSE work is paced and request-scoped, stops on disconnect or deadline, and returns the actual diagnostic result. Live JSON requests enforce a five-second deadline and emit structured, trace-correlated telemetry with bearer-bearing resource names redacted.
 
 ## Development and verification
 

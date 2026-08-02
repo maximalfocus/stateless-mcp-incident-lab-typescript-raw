@@ -3,7 +3,11 @@ import { healthResponse } from '../../src/adapters/inbound/health.js'
 import { handleSse } from '../../src/adapters/inbound/sse.js'
 import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
 import { executeFunction as catalogFunction } from '../../src/application/catalogs.js'
-import { MemoryEffectStore } from '../../src/application/index.js'
+import {
+  IncidentService,
+  MemoryEffectStore,
+  MemoryIncidentStore,
+} from '../../src/application/index.js'
 import { cacheKey, executeFunction as cacheFunction } from '../../src/client/cache.js'
 import { discoverWithVersionRecovery } from '../../src/client/version.js'
 import {
@@ -250,6 +254,23 @@ describe('reachable defensive paths', () => {
     const claims = await Promise.all(Array.from({ length: 20 }, async () => await store.claim('r')))
     expect(claims.filter(Boolean)).toHaveLength(1)
     expect(await store.ready()).toBe(true)
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled'))
+    await expect(store.claim('cancelled', controller.signal)).rejects.toThrow('cancelled')
+  })
+
+  it('rejects invalid and concurrent runtime incident operations', async () => {
+    const store = new MemoryIncidentStore()
+    const service = new IncidentService(store, () => 0)
+    await expect(service.call('create_incident', {})).resolves.toBeUndefined()
+    await expect(service.call('unknown', {})).resolves.toBeUndefined()
+    await expect(service.markMitigated('missing', 'r')).resolves.toBe(false)
+    await expect(
+      store.save(
+        { incidentId: 'missing', status: 'OPEN', expiresAt: '2026-08-02T01:00:00Z' },
+        'INVESTIGATING',
+      ),
+    ).rejects.toThrow('Concurrent incident transition')
   })
 
   it('returns no transition for invalid lifecycle actions', () => {

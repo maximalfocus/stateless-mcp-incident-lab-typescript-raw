@@ -65,6 +65,7 @@ export async function handleMrtr(
   paramsValue: unknown,
   inputValue: unknown,
   effectStore?: EffectStore,
+  signal?: AbortSignal,
 ): Promise<MrtrResponse | undefined> {
   if (!isObject(paramsValue) || paramsValue.name !== 'execute_remediation') return undefined
   const input = isObject(inputValue) ? inputValue : {}
@@ -147,7 +148,8 @@ export async function handleMrtr(
         ),
       }
     }
-    const effectApplied = effectStore === undefined ? true : await effectStore.claim(remediationId)
+    const effectApplied =
+      effectStore === undefined ? true : await effectStore.claim(remediationId, signal)
     let structuredContent: Record<string, unknown>
     if (typeof input.requestState_bytes === 'string') {
       structuredContent = {

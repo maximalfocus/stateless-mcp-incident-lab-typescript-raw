@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRawServer, startRawServer } from '../../src/adapters/inbound/index.js'
+import { ResponseCache } from '../../src/client/cache.js'
 import { clearResponseCache, rpcCall, runNetworkCli } from '../../src/client/cli.js'
 import { implementation, main, run } from '../../src/main.js'
 
@@ -185,6 +186,17 @@ describe('raw entry point', () => {
     expect(calls).toBe(1)
     await rpcCall(url, 'tools/list', {}, 2, { noCache: true })
     expect(calls).toBe(2)
+
+    let now = 0
+    const cache = new ResponseCache<string>(() => now)
+    expect(cache.get('missing')).toBeUndefined()
+    cache.set('ignored', 'value', -1)
+    cache.set('key', 'value', 1)
+    now = 2
+    expect(cache.get('key')).toBeUndefined()
+    expect(cache.get('key', true)).toBe('value')
+    cache.clear()
+    expect(cache.get('key', true)).toBeUndefined()
   })
 
   it('persists the incident lifecycle through the public HTTP boundary', async () => {
@@ -194,15 +206,26 @@ describe('raw entry point', () => {
       name: 'create_incident',
       arguments: { title: 'latency', severity: 'high', suspected_services: ['api'] },
     })
-    const incidentId = String(
-      (created.result as { structuredContent: { incident_id: string } }).structuredContent
-        .incident_id,
-    )
+    const incidentId = (created.result as { structuredContent: { incident_id: string } })
+      .structuredContent.incident_id
     const opened = await rpcCall(url, 'tools/call', {
       name: 'get_incident',
       arguments: { incident_id: incidentId },
     })
     expect(opened.result).toMatchObject({ structuredContent: { status: 'OPEN' } })
+    const timeline = await rpcCall(url, 'resources/read', {
+      uri: `incident://incidents/${incidentId}/timeline`,
+    })
+    expect(timeline.result).toMatchObject({
+      cacheScope: 'private',
+      contents: [{ mimeType: 'application/json' }],
+    })
+
+    const premature = await rpcCall(url, 'tools/call', {
+      name: 'propose_remediation',
+      arguments: { incident_id: incidentId, finding: 'DB_LATENCY' },
+    })
+    expect(premature.result).toMatchObject({ isError: true })
 
     await rpcCall(url, 'tools/call', {
       name: 'run_diagnostic',
@@ -212,10 +235,8 @@ describe('raw entry point', () => {
       name: 'propose_remediation',
       arguments: { incident_id: incidentId, finding: 'DB_LATENCY' },
     })
-    const remediationId = String(
-      (proposed.result as { structuredContent: { remediation_id: string } }).structuredContent
-        .remediation_id,
-    )
+    const remediationId = (proposed.result as { structuredContent: { remediation_id: string } })
+      .structuredContent.remediation_id
     const initial = await rpcCall(url, 'tools/call', {
       name: 'execute_remediation',
       arguments: { incident_id: incidentId, remediation_id: remediationId },
@@ -244,12 +265,133 @@ describe('raw entry point', () => {
       arguments: { incident_id: incidentId },
     })
     expect(resolved.result).toMatchObject({ structuredContent: { status: 'RESOLVED' } })
+    const afterResolution = await rpcCall(url, 'tools/call', {
+      name: 'run_diagnostic',
+      arguments: { incident_id: incidentId, service: 'api' },
+    })
+    expect(afterResolution.result).toMatchObject({ isError: true })
 
     const missing = await rpcCall(url, 'tools/call', {
       name: 'get_incident',
       arguments: { incident_id: 'missing' },
     })
     expect(missing.result).toMatchObject({ isError: true })
+  })
+
+  it('cancels live SSE work when the client disconnects', async () => {
+    let cancellations = 0
+    const base = await launch({
+      diagnosticIntervalMs: 100,
+      diagnosticCancelled: () => {
+        cancellations += 1
+      },
+      telemetry: () => undefined,
+    })
+    const controller = new AbortController()
+    const response = await fetch(`${base}/raw/mcp`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'tools/call',
+        'Mcp-Name': 'run_diagnostic',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'run_diagnostic',
+          arguments: { incident_id: 'i', service: 'api' },
+          _meta: {
+            progressToken: 'p',
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          },
+        },
+      }),
+    })
+    await response.body?.getReader().read()
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(cancellations).toBe(1)
+  })
+
+  it('enforces live request deadlines without applying a late effect', async () => {
+    let effectApplied = false
+    const effectStore = {
+      ready: () => Promise.resolve(true),
+      claim: (_remediationId: string, signal?: AbortSignal) =>
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => {
+            effectApplied = true
+            resolve(true)
+          }, 100)
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer)
+              resolve(false)
+            },
+            { once: true },
+          )
+        }),
+    }
+    const base = await launch({ deadlineMs: 10, effectStore, telemetry: () => undefined })
+    const url = `${base}/raw/mcp`
+    const args = { incident_id: 'i', remediation_id: 'r' }
+    const initial = await rpcCall(url, 'tools/call', {
+      name: 'execute_remediation',
+      arguments: args,
+    })
+    const requestState = (initial.result as { requestState: string }).requestState
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'tools/call',
+        'Mcp-Name': 'execute_remediation',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'execute_remediation',
+          arguments: args,
+          requestState,
+          inputResponses: {
+            approval: { action: 'accept', content: { decision: 'accept', confirmation: true } },
+          },
+          _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' },
+        },
+      }),
+    })
+    expect(response.status).toBe(504)
+    expect(await response.json()).toMatchObject({ id: 2, error: { code: -31998 } })
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(effectApplied).toBe(false)
+  })
+
+  it('emits correlated redacted telemetry from live requests', async () => {
+    const records: Array<Record<string, unknown>> = []
+    const base = await launch({ telemetry: (record) => records.push(record) })
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+    await rpcCall(`${base}/raw/mcp`, 'resources/read', {
+      uri: 'incident://incidents/secret/timeline',
+      _meta: { traceparent: `00-${traceId}-00f067aa0ba902b7-01` },
+    })
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        method: 'resources/read',
+        name: '[REDACTED]',
+        result_type: 'error',
+        trace_id: traceId,
+      }),
+    )
+    expect(JSON.stringify(records)).not.toContain('secret')
   })
 
   it('applies one effect under concurrent accepted HTTP retries', async () => {

@@ -11,14 +11,30 @@ import { handleHttp } from './http.js'
 import { handleSse } from './sse.js'
 
 const DEFAULT_BODY_LIMIT = 1024 * 1024
+const DEFAULT_DEADLINE_MS = 5000
+const DEFAULT_DIAGNOSTIC_INTERVAL_MS = 25
+
+export type TelemetryRecord = {
+  method: string
+  name: string
+  request_id: string | number
+  replica: string
+  latency_ms: number
+  result_type: 'complete' | 'error'
+  trace_id?: string
+}
 
 export type ServerOptions = {
   host?: string
   port?: number
   bodyLimitBytes?: number
+  deadlineMs?: number
+  diagnosticIntervalMs?: number
   effectStore?: EffectStore
   incidentStore?: IncidentStore
   ready?: () => boolean | Promise<boolean>
+  telemetry?: (record: TelemetryRecord) => void
+  diagnosticCancelled?: () => void
 }
 
 function headersOf(request: IncomingMessage): Record<string, string> {
@@ -65,14 +81,26 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   return Buffer.concat(chunks)
 }
 
-function sendSse(response: ServerResponse, observation: unknown): void {
+async function sendSse(
+  response: ServerResponse,
+  observation: unknown,
+  signal: AbortSignal,
+  intervalMs: number,
+): Promise<boolean> {
   const value = observation as { headers?: Record<string, string>; events?: unknown[] }
   response.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     ...value.headers,
   })
-  for (const eventValue of value.events ?? []) {
+  const events = value.events ?? []
+  const cancelled = (): boolean => signal.aborted || response.destroyed
+  for (const [index, eventValue] of events.entries()) {
+    if (cancelled()) return false
+    if (index > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs))
+      if (cancelled()) return false
+    }
     const event =
       typeof eventValue === 'object' && eventValue !== null && !Array.isArray(eventValue)
         ? (eventValue as Record<string, unknown>)
@@ -81,10 +109,108 @@ function sendSse(response: ServerResponse, observation: unknown): void {
     response.write(`data: ${JSON.stringify(event.data)}\n\n`)
   }
   response.end()
+  return true
+}
+
+function deadlineResponse(body: unknown, deadlineMs: number): unknown {
+  const id =
+    typeof body === 'object' && body !== null && !Array.isArray(body)
+      ? (body as { id?: unknown }).id
+      : undefined
+  return {
+    status: 504,
+    headers: { 'Content-Type': 'application/json' },
+    body: {
+      jsonrpc: '2.0',
+      ...(typeof id === 'string' || typeof id === 'number' ? { id } : {}),
+      error: {
+        code: -31998,
+        message: 'Request deadline exceeded',
+        data: { deadlineMs },
+      },
+    },
+  }
+}
+
+async function withinDeadline(
+  work: Promise<unknown>,
+  controller: AbortController,
+  body: unknown,
+  deadlineMs: number,
+): Promise<unknown> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<unknown>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new Error('Request deadline exceeded'))
+      resolve(deadlineResponse(body, deadlineMs))
+    }, deadlineMs)
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+function telemetryRecord(
+  body: unknown,
+  observation: unknown,
+  startedAt: number,
+): TelemetryRecord | undefined {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined
+  const requestBody = body as Record<string, unknown>
+  if (
+    typeof requestBody.method !== 'string' ||
+    (typeof requestBody.id !== 'string' && typeof requestBody.id !== 'number')
+  )
+    return undefined
+  const params =
+    typeof requestBody.params === 'object' &&
+    requestBody.params !== null &&
+    !Array.isArray(requestBody.params)
+      ? (requestBody.params as Record<string, unknown>)
+      : {}
+  const candidateName =
+    typeof params.name === 'string' ? params.name : typeof params.uri === 'string' ? params.uri : ''
+  const name = candidateName.includes('incident://incidents/') ? '[REDACTED]' : candidateName
+  const value =
+    typeof observation === 'object' && observation !== null && !Array.isArray(observation)
+      ? (observation as Record<string, unknown>)
+      : {}
+  const responseBody =
+    typeof value.body === 'object' && value.body !== null && !Array.isArray(value.body)
+      ? (value.body as Record<string, unknown>)
+      : {}
+  const result =
+    typeof responseBody.result === 'object' &&
+    responseBody.result !== null &&
+    !Array.isArray(responseBody.result)
+      ? (responseBody.result as Record<string, unknown>)
+      : {}
+  const meta =
+    typeof params._meta === 'object' && params._meta !== null && !Array.isArray(params._meta)
+      ? (params._meta as Record<string, unknown>)
+      : {}
+  const traceparent = typeof meta.traceparent === 'string' ? meta.traceparent : ''
+  const traceMatch = /^[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}$/i.exec(traceparent)
+  return {
+    method: requestBody.method,
+    name,
+    request_id: requestBody.id,
+    replica: 'raw-local-1',
+    latency_ms: Math.max(0, Date.now() - startedAt),
+    result_type: 'error' in responseBody || result.isError === true ? 'error' : 'complete',
+    ...(traceMatch?.[1] === undefined ? {} : { trace_id: traceMatch[1].toLowerCase() }),
+  }
 }
 
 export function createRawServer(options: ServerOptions = {}): Server {
   const bodyLimit = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS
+  const diagnosticIntervalMs = options.diagnosticIntervalMs ?? DEFAULT_DIAGNOSTIC_INTERVAL_MS
+  const telemetry =
+    options.telemetry ??
+    ((record: TelemetryRecord) => process.stderr.write(`${JSON.stringify(record)}\n`))
   const effectStore = options.effectStore ?? new MemoryEffectStore()
   const incidentStore = options.incidentStore ?? new MemoryIncidentStore()
   const incidentService = new IncidentService(incidentStore)
@@ -158,18 +284,34 @@ export function createRawServer(options: ServerOptions = {}): Server {
         return
       }
       const requestValue = { method: request.method, headers: headersOf(request), body }
+      const startedAt = Date.now()
+      const finish = (observation: unknown): void => {
+        const record = telemetryRecord(body, observation, startedAt)
+        if (record !== undefined) telemetry(record)
+        send(response, observation)
+      }
       const acceptsSse = request.headers.accept?.includes('text/event-stream') === true
       const meta =
         typeof body === 'object' && body !== null && !Array.isArray(body)
           ? (body as { params?: { _meta?: { progressToken?: unknown } } }).params?._meta
           : undefined
+      const controller = new AbortController()
+      request.once('aborted', () => {
+        controller.abort(new Error('Client disconnected'))
+      })
       if (acceptsSse && meta?.progressToken !== undefined) {
-        const validation = await handleHttp(
-          requestValue,
-          null,
-          { body_bytes: bodyBytes.length, configured_limit_bytes: bodyLimit },
-          effectStore,
-          incidentService,
+        const validation = await withinDeadline(
+          handleHttp(
+            requestValue,
+            null,
+            { body_bytes: bodyBytes.length, configured_limit_bytes: bodyLimit },
+            effectStore,
+            incidentService,
+            controller.signal,
+          ),
+          controller,
+          body,
+          deadlineMs,
         )
         const validationValue =
           typeof validation === 'object' && validation !== null && !Array.isArray(validation)
@@ -182,15 +324,32 @@ export function createRawServer(options: ServerOptions = {}): Server {
             ? (validationValue.body as Record<string, unknown>)
             : {}
         if (validationValue.status !== 200 || 'error' in validationBody) {
-          send(response, validation)
+          finish(validation)
           return
         }
-        sendSse(response, await handleSse(requestValue, null, {}))
+        let completed = false
+        response.once('close', () => {
+          if (!completed) controller.abort(new Error('Client disconnected'))
+        })
+        const deadlineTimer = setTimeout(() => {
+          controller.abort(new Error('Request deadline exceeded'))
+        }, deadlineMs)
+        completed = await sendSse(
+          response,
+          await handleSse(requestValue, null, { final_result: validationBody.result }),
+          controller.signal,
+          diagnosticIntervalMs,
+        )
+        clearTimeout(deadlineTimer)
+        if (!completed) options.diagnosticCancelled?.()
+        else {
+          const record = telemetryRecord(body, validation, startedAt)
+          if (record !== undefined) telemetry(record)
+        }
         return
       }
-      send(
-        response,
-        await handleHttp(
+      const observation = await withinDeadline(
+        handleHttp(
           requestValue,
           null,
           {
@@ -199,8 +358,13 @@ export function createRawServer(options: ServerOptions = {}): Server {
           },
           effectStore,
           incidentService,
+          controller.signal,
         ),
+        controller,
+        body,
+        deadlineMs,
       )
+      finish(observation)
     } catch (error) {
       if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'application/json' })
       response.end(

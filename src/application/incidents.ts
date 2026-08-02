@@ -18,7 +18,7 @@ export type IncidentRecord = {
 export interface IncidentStore {
   create(record: IncidentRecord): Promise<void>
   get(incidentId: string): Promise<IncidentRecord | undefined>
-  save(record: IncidentRecord): Promise<void>
+  save(record: IncidentRecord, expectedStatus?: IncidentState): Promise<void>
   ready(): Promise<boolean>
 }
 
@@ -35,7 +35,11 @@ export class MemoryIncidentStore implements IncidentStore {
     return Promise.resolve(record === undefined ? undefined : { ...record })
   }
 
-  save(record: IncidentRecord): Promise<void> {
+  save(record: IncidentRecord, expectedStatus?: IncidentState): Promise<void> {
+    const current = this.#records.get(record.incidentId)
+    if (expectedStatus !== undefined && current?.status !== expectedStatus) {
+      return Promise.reject(new Error('Concurrent incident transition'))
+    }
     this.#records.set(record.incidentId, { ...record })
     return Promise.resolve()
   }
@@ -109,7 +113,7 @@ export class IncidentService {
     if (name === 'run_diagnostic') {
       if (record.status === 'OPEN') {
         record.status = 'INVESTIGATING'
-        await this.#store.save(record)
+        await this.#store.save(record, 'OPEN')
       }
       return toolResult({
         diagnostic_id: randomUUID(),
@@ -127,7 +131,7 @@ export class IncidentService {
         return domainError('Investigate the incident before proposing remediation.')
       const remediationId = randomUUID()
       record.remediationId = remediationId
-      await this.#store.save(record)
+      await this.#store.save(record, 'INVESTIGATING')
       return toolResult({
         remediation_id: remediationId,
         action: 'throttle_synthetic_traffic',
@@ -137,11 +141,42 @@ export class IncidentService {
       })
     }
     if (name === 'resolve_incident') {
+      const previousStatus = record.status
       record.status = 'RESOLVED'
-      await this.#store.save(record)
+      await this.#store.save(record, previousStatus)
       return toolResult({ incident_id: incidentId, status: 'RESOLVED' })
     }
     return undefined
+  }
+
+  async readTimeline(uri: string): Promise<ObjectValue | undefined> {
+    const match = /^incident:\/\/incidents\/([^/]+)\/timeline$/.exec(uri)
+    if (match?.[1] === undefined) return undefined
+    const record = await this.#store.get(match[1])
+    if (record === undefined || Date.parse(record.expiresAt) <= this.#now()) {
+      return domainError('Unknown or expired incident; create another incident.')
+    }
+    return {
+      resultType: 'complete',
+      contents: [
+        {
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            events: [
+              {
+                service_id: 'api',
+                signal: 'latency',
+                severity: 'high',
+                timestamp: '2026-08-02T00:00:00Z',
+              },
+            ],
+          }),
+        },
+      ],
+      ttlMs: 1000,
+      cacheScope: 'private',
+    }
   }
 
   async markMitigated(incidentId: string, remediationId: string): Promise<boolean> {
@@ -153,7 +188,7 @@ export class IncidentService {
     )
       return false
     record.status = 'MITIGATED'
-    await this.#store.save(record)
+    await this.#store.save(record, 'INVESTIGATING')
     return true
   }
 }
