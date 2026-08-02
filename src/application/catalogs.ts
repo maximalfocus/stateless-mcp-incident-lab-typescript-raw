@@ -72,7 +72,7 @@ export function primitiveResult(
     if (publicContent !== undefined) {
       return { ...PUBLIC_CATALOG, contents: [publicContent], _meta: catalogMeta() }
     }
-    if (params.uri === 'incident://incidents/INCIDENT-OPEN/timeline') {
+    if (/^incident:\/\/incidents\/[^/]+\/timeline$/.test(params.uri)) {
       return {
         resultType: 'complete',
         contents: [
@@ -168,6 +168,30 @@ export function primitiveError(
   paramsValue: unknown,
 ): Record<string, unknown> | undefined {
   const params = isObject(paramsValue) ? paramsValue : {}
+  if (method === 'tools/call') {
+    const tool =
+      typeof params.name === 'string' ? TOOLS.find((item) => item.name === params.name) : undefined
+    if (tool === undefined) {
+      return {
+        code: -32602,
+        message: 'Invalid params',
+        data: { reason: 'Unknown tool', name: params.name },
+      }
+    }
+    const args = isObject(params.arguments) ? params.arguments : undefined
+    const schema = isObject(tool.inputSchema) ? tool.inputSchema : {}
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((field): field is string => typeof field === 'string')
+      : []
+    const missing = required.filter((field) => args === undefined || !Object.hasOwn(args, field))
+    if (args === undefined || missing.length > 0) {
+      return {
+        code: -32602,
+        message: 'Invalid params',
+        data: { reason: 'Missing required arguments', missing },
+      }
+    }
+  }
   if (method === 'tools/list' && typeof params.cursor === 'string') {
     return { code: -32602, message: 'Invalid params', data: { reason: 'Invalid cursor' } }
   }

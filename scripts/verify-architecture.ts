@@ -47,21 +47,40 @@ async function sourceFiles(root: string): Promise<string[]> {
   return files.sort()
 }
 
-function importsOf(path: string, text: string): string[] {
+type ModuleEdge = { specifier?: string; kind: string }
+
+function stringLiteral(node: ts.Node | undefined): string | undefined {
+  return node !== undefined &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : undefined
+}
+
+function importsOf(path: string, text: string): ModuleEdge[] {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
-  const imports: string[] = []
+  const imports: ModuleEdge[] = []
+  function add(kind: string, node: ts.Node | undefined): void {
+    const specifier = stringLiteral(node)
+    imports.push(specifier === undefined ? { kind } : { kind, specifier })
+  }
   function visit(node: ts.Node): void {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier !== undefined &&
-      ts.isStringLiteral(node.moduleSpecifier)
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier !== undefined) add(ts.SyntaxKind[node.kind], node.moduleSpecifier)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
     ) {
-      imports.push(node.moduleSpecifier.text)
-    }
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      const argument = node.arguments[0]
-      if (node.arguments.length === 1 && argument !== undefined && ts.isStringLiteral(argument)) {
-        imports.push(argument.text)
+      add('ImportEqualsDeclaration', node.moduleReference.expression)
+    } else if (ts.isImportTypeNode(node)) {
+      add(
+        'ImportTypeNode',
+        ts.isLiteralTypeNode(node.argument) ? node.argument.literal : node.argument,
+      )
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
+      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require'
+      if (isDynamicImport || isRequire) {
+        add(isDynamicImport ? 'dynamic import' : 'require', node.arguments[0])
       }
     }
     ts.forEachChild(node, visit)
@@ -124,13 +143,17 @@ export async function verifyArchitecture(
     if (matched.length === 0) violations.push(`${assertion.from_glob}: matched no source files`)
     for (const file of matched) {
       const rel = slash(relative(root, file))
-      for (const specifier of importsOf(file, await readFile(file, 'utf8'))) {
-        const imported = canonicalImport(root, file, specifier)
+      for (const edge of importsOf(file, await readFile(file, 'utf8'))) {
+        if (edge.specifier === undefined) {
+          violations.push(`${rel}: unresolved ${edge.kind} module edge`)
+          continue
+        }
+        const imported = canonicalImport(root, file, edge.specifier)
         if (assertion.type === 'no_import' && new RegExp(assertion.import_pattern).test(imported)) {
-          violations.push(`${rel}: forbidden import ${specifier} → ${imported}`)
+          violations.push(`${rel}: forbidden import ${edge.specifier} → ${imported}`)
         }
         if (assertion.type === 'no_deep_import' && deepImportViolation(assertion, rel, imported)) {
-          violations.push(`${rel}: deep import ${specifier} → ${imported}`)
+          violations.push(`${rel}: deep import ${edge.specifier} → ${imported}`)
         }
       }
     }
@@ -161,18 +184,30 @@ async function selfTest(): Promise<void> {
       ],
     }
     await verifyArchitecture(boundary, root)
-    await writeFile(
-      join(root, 'src/application/bad.ts'),
-      "import { incident } from '../domain/incidents/internal.js'\nexport { incident }\n",
-    )
-    let rejected = false
-    try {
-      await verifyArchitecture(boundary, root)
-    } catch {
-      rejected = true
+    const bad = join(root, 'src/application/bad.ts')
+    const forbiddenForms = [
+      "import { incident } from '../domain/incidents/internal.js'\n",
+      "export { incident } from '../domain/incidents/internal.js'\n",
+      "import incident = require('../domain/incidents/internal.js')\n",
+      "const incident = require('../domain/incidents/internal.js')\n",
+      "const incident = import('../domain/incidents/internal.js')\n",
+      "export type Incident = import('../domain/incidents/internal.js').Incident\n",
+      "const target = '../domain/incidents/internal.js'; import(target)\n",
+      "const target = '../domain/incidents/internal.js'; require(target)\n",
+    ]
+    for (const form of forbiddenForms) {
+      await writeFile(bad, form)
+      let rejected = false
+      try {
+        await verifyArchitecture(boundary, root)
+      } catch {
+        rejected = true
+      }
+      if (!rejected) throw new Error(`self-test: module edge was accepted: ${form}`)
     }
-    if (!rejected) throw new Error('self-test: deep import violation was accepted')
-    console.log('PASS architecture verifier near-miss and violation self-test')
+    console.log(
+      `PASS architecture verifier rejected ${String(forbiddenForms.length)} module-edge forms`,
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

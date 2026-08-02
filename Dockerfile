@@ -20,7 +20,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY --from=builder /app/dist/src ./dist
+COPY --from=builder /app/dist/src ./dist/src
 USER node
-ENTRYPOINT ["node", "dist/main.js"]
-CMD ["--version"]
+EXPOSE 3101
+ENTRYPOINT ["node", "dist/src/main.js"]
+CMD ["serve"]

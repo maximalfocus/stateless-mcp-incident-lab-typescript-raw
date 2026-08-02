@@ -5,7 +5,7 @@
   "description": "Raw HTTP and JSON-RPC implementation of the Stateless MCP Incident Lab",
   "type": "module",
   "bin": {
-    "incident-mcp": "dist/main.js"
+    "incident-mcp": "dist/src/main.js"
   },
   "engines": {
     "node": ">=24"
@@ -20,7 +20,7 @@
     "test:coverage": "vitest run --coverage",
     "test:mutation": "CONFORMANCE_PATH=${CONFORMANCE_PATH:-$PWD/../stateless-mcp-incident-lab-conformance/conformance} stryker run",
     "test:conformance": "tsx test/conformance/runner.ts --lane raw",
-    "start": "node dist/main.js"
+    "start": "node dist/src/main.js serve"
   },
   "keywords": [
     "mcp",

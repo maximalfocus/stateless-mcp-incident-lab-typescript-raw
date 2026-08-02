@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { main, matchValue } from './runner.js'
+import { main, matchValue, validateExpected } from './runner.js'
 
 describe('raw conformance replay', () => {
   it('passes the complete selected lane in-process', async () => {
@@ -34,17 +34,33 @@ describe('strict golden matching', () => {
     ).toEqual([])
   })
 
-  it('enforces placeholder types', () => {
+  it('enforces placeholder types and formats', () => {
     expect(matchValue('{{ANY_STRING}}', 42)).not.toEqual([])
+    expect(matchValue('{{ANY_STRING}}', '')).not.toEqual([])
     expect(matchValue('{{ANY_STRING}}', 'replica-a')).toEqual([])
-    expect(matchValue('{{TIMESTAMP}}', 'not-a-date')).not.toEqual([])
+    expect(matchValue('{{TIMESTAMP}}', '2026-08-02')).not.toEqual([])
     expect(matchValue('{{TIMESTAMP}}', '2026-08-02T00:00:00Z')).toEqual([])
   })
 
-  it('ignores executable assertion metadata rather than treating it as output', () => {
+  it('fails closed on malformed directives and unknown placeholders', () => {
+    expect(() => {
+      validateExpected({ value: '{{UNKNOWN}}' })
+    }).toThrow('unknown placeholder')
+    expect(() => {
+      validateExpected({ '{{ALLOW_EXTRA}}': false })
+    }).toThrow('must be true')
+    expect(() => {
+      validateExpected({ assertions: null })
+    }).toThrow('array required')
+  })
+
+  it('distinguishes directives from observable architecture assertions', () => {
     expect(
       matchValue({ assertions: [{ type: 'strict_http_shape' }], status: 200 }, { status: 200 }),
     ).toEqual([])
+    expect(matchValue({ assertions: [{ type: 'no_import' }] }, {})).toContain(
+      '$.assertions: missing',
+    )
   })
 
   it('derives SSE final-count and trailing-event assertions', () => {

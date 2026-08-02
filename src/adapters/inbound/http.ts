@@ -183,5 +183,12 @@ export function handleHttp(
   if (result !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, result })
   const error = primitiveError(body.method, body.params)
   if (error !== undefined) return response(200, { jsonrpc: '2.0', id: body.id, error })
-  return response(200, { jsonrpc: '2.0', id: body.id, result: discover() })
+  if (body.method === 'server/discover') {
+    return response(200, { jsonrpc: '2.0', id: body.id, result: discover() })
+  }
+  return response(404, {
+    jsonrpc: '2.0',
+    id: body.id,
+    error: { code: -32601, message: 'Method not found' },
+  })
 }

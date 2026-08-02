@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +16,7 @@ import { executeFunction as transportFunction } from '../../src/client/http.js'
 import { executeFunction as dependencyFunction } from '../../src/dependencies/index.js'
 import { checkProperty } from '../../src/properties.js'
 import { executeFunction as protocolFunction } from '../../src/protocol/codec.js'
+import { signRequestState, verifyRequestState } from '../../src/protocol/request-state.js'
 import { executeFunction as securityFunction } from '../../src/protocol/validation.js'
 import { handleHttp as handleVersionHttp } from '../../src/protocol/version.js'
 
@@ -44,11 +46,22 @@ const DEFAULT_CONFORMANCE = resolve(
 )
 const ROOT = resolve(process.env.CONFORMANCE_PATH ?? DEFAULT_CONFORMANCE)
 const ALLOW_EXTRA = '{{ALLOW_EXTRA}}'
-const PLACEHOLDERS = new Set([
-  '{{ANY_STRING}}',
-  '{{GENERATED_ID}}',
-  '{{TIMESTAMP}}',
-  '{{ALLOW_EXTRA}}',
+const PLACEHOLDERS = new Set(['{{ANY_STRING}}', '{{GENERATED_ID}}', '{{TIMESTAMP}}'])
+const EXPECTED_COUNTS: Readonly<Record<string, number>> = { raw: 160 }
+const ALLOWED_BOUNDARIES = new Set([
+  'cli',
+  'contract',
+  'function',
+  'http',
+  'http-contract',
+  'lint-assertion',
+  'metric-assertion',
+  'property',
+  'sse',
+  'state-machine',
+  'tool-call',
+  'trace-span',
+  'workflow-assertion',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,14 +77,16 @@ function placeholderTemplate(expected: string): RegExp | undefined {
 
 export function matchValue(expected: unknown, actual: unknown, path = '$'): string[] {
   if (typeof expected === 'string' && PLACEHOLDERS.has(expected)) {
-    if (expected === '{{ANY_STRING}}' && typeof actual !== 'string')
-      return [`${path}: expected string`]
+    if (expected === '{{ANY_STRING}}' && (typeof actual !== 'string' || actual.length === 0))
+      return [`${path}: expected non-empty string`]
     if (expected === '{{GENERATED_ID}}' && (typeof actual !== 'string' || actual.length === 0)) {
       return [`${path}: expected generated identifier`]
     }
     if (
       expected === '{{TIMESTAMP}}' &&
-      (typeof actual !== 'string' || !Number.isFinite(Date.parse(actual)))
+      (typeof actual !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(actual) ||
+        !Number.isFinite(Date.parse(actual)))
     ) {
       return [`${path}: expected ISO timestamp`]
     }
@@ -102,7 +117,14 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
   const allowExtra = expectedRecord[ALLOW_EXTRA] === true
   const errors: string[] = []
   for (const [key, value] of Object.entries(expectedRecord)) {
-    if (key === ALLOW_EXTRA || key === 'assertions') continue
+    if (
+      key === ALLOW_EXTRA ||
+      (key === 'assertions' &&
+        path === '$' &&
+        Array.isArray(value) &&
+        value.every((assertion) => isRecord(assertion) && assertion.type === 'strict_http_shape'))
+    )
+      continue
     if (key === 'final_response_count' && typeof value === 'number') {
       const events = Array.isArray(actual.events) ? actual.events : []
       const count = events.filter((event) => {
@@ -149,13 +171,55 @@ export function matchValue(expected: unknown, actual: unknown, path = '$'): stri
   return errors
 }
 
-async function readJson(path: string, fallback: Json): Promise<Json> {
+async function readJson(path: string, fallback?: Json): Promise<Json> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as Json
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && fallback !== undefined)
+      return fallback
     throw error
   }
+}
+
+export function validateExpected(value: unknown, path = '$'): void {
+  if (typeof value === 'string') {
+    for (const marker of value.match(/\{\{[^{}]+\}\}/g) ?? []) {
+      if (!PLACEHOLDERS.has(marker) && marker !== ALLOW_EXTRA) {
+        throw new Error(`${path}: unknown placeholder ${marker}`)
+      }
+    }
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      validateExpected(item, `${path}[${String(index)}]`)
+    })
+    return
+  }
+  if (!isRecord(value)) return
+  if (ALLOW_EXTRA in value && value[ALLOW_EXTRA] !== true) {
+    throw new Error(`${path}.${ALLOW_EXTRA}: marker must be true`)
+  }
+  const directiveAssertions =
+    path === '$' &&
+    Array.isArray(value.assertions) &&
+    value.assertions.length > 0 &&
+    value.assertions.every(
+      (assertion) => isRecord(assertion) && assertion.type === 'strict_http_shape',
+    )
+  if (path === '$' && 'assertions' in value && !Array.isArray(value.assertions)) {
+    throw new Error(`${path}.assertions: array required`)
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (!(directiveAssertions && key === 'assertions') && key !== ALLOW_EXTRA) {
+      validateExpected(item, `${path}.${key}`)
+    }
+  }
+}
+
+function validateMetadata(test: TestMetadata, dir: string): void {
+  if (!/^([A-Z]+)-\d{3}$/.test(test.spec_id)) throw new Error(`${dir}: invalid spec_id`)
+  if (!ALLOWED_BOUNDARIES.has(test.boundary)) throw new Error(`${dir}: unknown boundary`)
 }
 
 async function discover(dir: string): Promise<string[]> {
@@ -179,21 +243,57 @@ function lanePaths(workitems: string, lane: string): Set<string> {
 }
 
 async function loadFixture(dir: string): Promise<Fixture> {
-  const test = (await readJson(join(dir, 'test.json'), {})) as unknown as TestMetadata
+  const test = (await readJson(join(dir, 'test.json'))) as unknown as TestMetadata
+  validateMetadata(test, dir)
   const relativeDir = `conformance/${relative(ROOT, dir)}`
+  const expected = await readJson(join(dir, 'expected.json'))
+  validateExpected(expected)
   return {
     dir,
     relativeDir,
     category: relative(ROOT, dir).split('/')[0] ?? '',
     test,
-    input: await readJson(join(dir, 'input.json'), {}),
+    input: await readJson(join(dir, 'input.json')),
     request: await readJson(join(dir, 'request.json'), {}),
     seed: await readJson(join(dir, 'seed.json'), null),
-    expected: await readJson(join(dir, 'expected.json'), {}),
+    expected,
   }
 }
 
-async function execute(fixture: Fixture): Promise<unknown> {
+function materializeMrtrState(fixture: Fixture): Fixture {
+  if (fixture.category !== 'mrtr' || !isRecord(fixture.request)) return fixture
+  const request = structuredClone(fixture.request)
+  const body = isRecord(request.body) ? request.body : undefined
+  const params = body !== undefined && isRecord(body.params) ? body.params : undefined
+  if (
+    typeof params?.requestState !== 'string' ||
+    verifyRequestState(params.requestState) !== undefined
+  )
+    return fixture
+  const argumentsValue = isRecord(params.arguments) ? params.arguments : {}
+  const input = isRecord(fixture.input) ? structuredClone(fixture.input) : {}
+  const clock = typeof input.clock === 'string' ? Date.parse(input.clock) : Date.now()
+  const claims = {
+    method:
+      input.state_fault === 'method_mismatch'
+        ? 'tools/call:other'
+        : 'tools/call:execute_remediation',
+    argumentsHash:
+      input.state_fault === 'arguments_mismatch'
+        ? createHash('sha256').update('{}').digest('hex')
+        : createHash('sha256').update(JSON.stringify(argumentsValue)).digest('hex'),
+    expiresAt: new Date(clock + (input.state_fault === 'expired' ? -1 : 5 * 60_000)).toISOString(),
+  }
+  let token = signRequestState(claims)
+  if (input.state_fault === 'tampered')
+    token = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`
+  params.requestState = token
+  if (typeof input.requestState_bytes === 'string') input.requestState_bytes = token
+  return { ...fixture, request, input }
+}
+
+async function execute(fixtureValue: Fixture): Promise<unknown> {
+  const fixture = materializeMrtrState(fixtureValue)
   const { boundary, property } = fixture.test
   if (boundary === 'lint-assertion') {
     return fixture.category === 'security'
@@ -231,10 +331,21 @@ async function execute(fixture: Fixture): Promise<unknown> {
   throw new Error(`Unsupported boundary ${boundary}`)
 }
 
+function observableExpected(expected: Json): Json {
+  if (!isRecord(expected) || !Array.isArray(expected.assertions)) return expected
+  const directives = expected.assertions.every(
+    (assertion) => isRecord(assertion) && assertion.type === 'strict_http_shape',
+  )
+  if (!directives) return expected
+  const observable = { ...expected }
+  delete observable.assertions
+  return observable
+}
+
 async function runFixture(fixture: Fixture): Promise<Result> {
   try {
     const actual = await execute(fixture)
-    const errors = matchValue(fixture.expected, actual)
+    const errors = matchValue(observableExpected(fixture.expected), actual)
     return errors.length === 0
       ? { specId: fixture.test.spec_id, status: 'PASS' }
       : { specId: fixture.test.spec_id, status: 'FAIL', detail: errors.slice(0, 5).join('; ') }
@@ -259,6 +370,16 @@ export async function main(): Promise<number> {
   const workitems = await readFile(resolve(ROOT, '..', 'WORKITEMS.md'), 'utf8')
   const selected = lanePaths(workitems, lane)
   const fixtures = await Promise.all(dirs.map(loadFixture))
+  const fixturePaths = new Set(fixtures.map((fixture) => fixture.relativeDir))
+  const specIds = fixtures.map((fixture) => fixture.test.spec_id)
+  if (fixtures.length !== 197 || new Set(specIds).size !== fixtures.length) {
+    throw new Error('Conformance discovery must contain 197 unique spec IDs')
+  }
+  const expectedCount = EXPECTED_COUNTS[lane]
+  if (expectedCount === undefined) throw new Error(`Lane ${lane} has no pinned expected count`)
+  if (selected.size !== expectedCount || [...selected].some((path) => !fixturePaths.has(path))) {
+    throw new Error(`Lane ${lane} selection is incomplete or contains unknown paths`)
+  }
   const runnable = fixtures.filter(
     (fixture) =>
       selected.has(fixture.relativeDir) &&
@@ -268,7 +389,7 @@ export async function main(): Promise<number> {
   console.log(
     `DISCOVERED ${String(fixtures.length)} SELECTED ${String(runnable.length)} LANE ${lane}`,
   )
-  if (process.argv.includes('--discover-only')) return fixtures.length === 197 ? 0 : 1
+  if (process.argv.includes('--discover-only')) return 0
   if (specFilter.size > 0 && runnable.length !== specFilter.size) {
     console.error(
       `Requested ${String(specFilter.size)} spec IDs but selected ${String(runnable.length)}`,

@@ -1,4 +1,3 @@
-import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { healthResponse } from '../../src/adapters/inbound/health.js'
 import { handleSse } from '../../src/adapters/inbound/sse.js'
@@ -70,28 +69,18 @@ describe('reachable defensive paths', () => {
   it('signs, verifies, and rejects corrupt request state', () => {
     const claims = { method: 'tools/call', argumentsHash: 'abc', expiresAt: '2026-08-02T00:05:00Z' }
     const signed = signRequestState(claims)
-    expect(signed).toBe(
-      'eyJtZXRob2QiOiJ0b29scy9jYWxsIiwiYXJndW1lbnRzSGFzaCI6ImFiYyIsImV4cGlyZXNBdCI6IjIwMjYtMDgtMDJUMDA6MDU6MDBaIn0.jLeoElCU4ZOEDGGO9rLyvv6Yo5wNO9VSswxVocK1spU',
-    )
+    expect(signed.split('.')).toHaveLength(2)
     expect(verifyRequestState(signed)).toEqual(claims)
     expect(verifyRequestState('bad')).toBeUndefined()
     expect(verifyRequestState(`${signed}.extra`)).toBeUndefined()
     expect(verifyRequestState(`${signed.slice(0, -1)}x`)).toBeUndefined()
 
-    const payload = Buffer.from(JSON.stringify({ nope: true })).toString('base64url')
-    const signature = createHmac('sha256', 'stateless-mcp-incident-lab-shared-request-state')
-      .update(payload)
-      .digest('base64url')
-    expect(verifyRequestState(`${payload}.${signature}`)).toBeUndefined()
     for (const value of [null, {}, { method: 'x' }, { method: 'x', argumentsHash: 'y' }]) {
-      const invalidPayload = Buffer.from(JSON.stringify(value)).toString('base64url')
-      const invalidSignature = createHmac(
-        'sha256',
-        'stateless-mcp-incident-lab-shared-request-state',
-      )
-        .update(invalidPayload)
-        .digest('base64url')
-      expect(verifyRequestState(`${invalidPayload}.${invalidSignature}`)).toBeUndefined()
+      expect(
+        verifyRequestState(
+          signRequestState(value as unknown as Parameters<typeof signRequestState>[0]),
+        ),
+      ).toBeUndefined()
     }
   })
 

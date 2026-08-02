@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 const SCHEMA = 'https://json-schema.org/draft/2020-12/schema'
 
 type JsonObject = Record<string, unknown>
@@ -167,11 +169,33 @@ export function callTool(name: string, argumentsValue: unknown): JsonObject | un
     typeof argumentsValue === 'object' && argumentsValue !== null && !Array.isArray(argumentsValue)
       ? (argumentsValue as JsonObject)
       : {}
-  if (name === 'create_incident') {
+  if (
+    name === 'create_incident' &&
+    typeof args.title === 'string' &&
+    args.title.length > 0 &&
+    typeof args.severity === 'string' &&
+    Array.isArray(args.suspected_services)
+  ) {
     return toolResult({
-      incident_id: '00000000-0000-4000-8000-000000000001',
+      incident_id: randomUUID(),
       status: 'OPEN',
-      expires_at: '2026-08-02T01:00:00Z',
+      expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+    })
+  }
+  if (name === 'get_incident' && typeof args.incident_id === 'string') {
+    return toolResult({
+      incident_id: args.incident_id,
+      status: 'OPEN',
+      related_handles: [],
+    })
+  }
+  if (name === 'propose_remediation' && typeof args.incident_id === 'string') {
+    return toolResult({
+      remediation_id: 'REMEDIATION-001',
+      action: 'throttle_synthetic_traffic',
+      target: 'api',
+      status: 'PROPOSED',
+      effect: 'simulated',
     })
   }
   if (name === 'query_telemetry') {
@@ -188,9 +212,12 @@ export function callTool(name: string, argumentsValue: unknown): JsonObject | un
       ],
     })
   }
+  if (name === 'resolve_incident' && typeof args.incident_id === 'string') {
+    return toolResult({ incident_id: args.incident_id, status: 'RESOLVED' })
+  }
   if (name === 'run_diagnostic') {
     return toolResult({
-      diagnostic_id: 'DIAGNOSTIC-001',
+      diagnostic_id: randomUUID(),
       findings: [
         {
           code: 'DB_LATENCY',

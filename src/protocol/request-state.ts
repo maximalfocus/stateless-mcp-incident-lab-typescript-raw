@@ -1,6 +1,15 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
-const SECRET = 'stateless-mcp-incident-lab-shared-request-state'
+const EPHEMERAL_DEVELOPMENT_SECRET = randomBytes(32)
+
+function secret(): Buffer | string {
+  const configured = process.env.MCP_REQUEST_STATE_SECRET
+  if (configured !== undefined && Buffer.byteLength(configured) >= 32) return configured
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('MCP_REQUEST_STATE_SECRET must contain at least 32 bytes')
+  }
+  return EPHEMERAL_DEVELOPMENT_SECRET
+}
 
 export type RequestStateClaims = {
   method: string
@@ -10,14 +19,14 @@ export type RequestStateClaims = {
 
 export function signRequestState(claims: RequestStateClaims): string {
   const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
-  const signature = createHmac('sha256', SECRET).update(payload).digest('base64url')
+  const signature = createHmac('sha256', secret()).update(payload).digest('base64url')
   return `${payload}.${signature}`
 }
 
 export function verifyRequestState(value: string): RequestStateClaims | undefined {
   const [payload, signature, extra] = value.split('.')
   if (payload === undefined || signature === undefined || extra !== undefined) return undefined
-  const expected = createHmac('sha256', SECRET).update(payload).digest()
+  const expected = createHmac('sha256', secret()).update(payload).digest()
   let supplied: Buffer
   try {
     supplied = Buffer.from(signature, 'base64url')

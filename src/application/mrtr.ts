@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { signRequestState } from '../protocol/request-state.js'
+import { signRequestState, verifyRequestState } from '../protocol/request-state.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -31,19 +31,27 @@ const APPROVAL_REQUEST = {
   },
 }
 
-function stateFor(argumentsValue: unknown): string {
-  const argumentsHash = createHash('sha256').update(JSON.stringify(argumentsValue)).digest('hex')
+function hashArguments(argumentsValue: unknown): string {
+  return createHash('sha256').update(JSON.stringify(argumentsValue)).digest('hex')
+}
+
+function stateFor(argumentsValue: unknown, clock?: string): string {
+  const now = clock === undefined ? Date.now() : Date.parse(clock)
   return signRequestState({
     method: 'tools/call:execute_remediation',
-    argumentsHash,
-    expiresAt: '2026-08-02T00:05:00Z',
+    argumentsHash: hashArguments(argumentsValue),
+    expiresAt: new Date(now + 5 * 60_000).toISOString(),
   })
 }
 
-function inputRequired(argumentsValue: unknown, missingFields?: string[]): Record<string, unknown> {
+function inputRequired(
+  argumentsValue: unknown,
+  missingFields?: string[],
+  clock?: string,
+): Record<string, unknown> {
   return {
     resultType: 'input_required',
-    requestState: stateFor(argumentsValue),
+    requestState: stateFor(argumentsValue, clock),
     ...(missingFields === undefined ? {} : { missingFields, effect_count: 0 }),
     _meta: META,
     inputRequests: APPROVAL_REQUEST,
@@ -57,6 +65,18 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
   const input = isObject(inputValue) ? inputValue : {}
   const argumentsValue = isObject(paramsValue.arguments) ? paramsValue.arguments : {}
   const requestState = paramsValue.requestState
+  const missingArguments = ['incident_id', 'remediation_id'].filter(
+    (field) => typeof argumentsValue[field] !== 'string' || argumentsValue[field].length === 0,
+  )
+  if (missingArguments.length > 0) {
+    return {
+      error: {
+        code: -32602,
+        message: 'Invalid params',
+        data: { reason: 'Missing required arguments', missing: missingArguments },
+      },
+    }
+  }
 
   if (requestState === undefined) {
     const meta = isObject(paramsValue._meta) ? paramsValue._meta : {}
@@ -77,17 +97,30 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
         },
       }
     }
-    return { result: inputRequired(argumentsValue) }
+    return {
+      result: inputRequired(
+        argumentsValue,
+        undefined,
+        typeof input.clock === 'string' ? input.clock : undefined,
+      ),
+    }
   }
 
-  if (typeof input.state_fault === 'string') {
-    return {
-      error: {
-        code: -32602,
-        message: 'Invalid params',
-        data: { reason: input.state_fault, effect_count: 0 },
-      },
-    }
+  const invalidState = (reason: string): MrtrResponse => ({
+    error: {
+      code: -32602,
+      message: 'Invalid params',
+      data: { reason, effect_count: 0 },
+    },
+  })
+  if (typeof requestState !== 'string') return invalidState('tampered')
+  const claims = verifyRequestState(requestState)
+  if (claims === undefined) return invalidState('tampered')
+  const now = typeof input.clock === 'string' ? Date.parse(input.clock) : Date.now()
+  if (Date.parse(claims.expiresAt) <= now) return invalidState('expired')
+  if (claims.method !== 'tools/call:execute_remediation') return invalidState('method_mismatch')
+  if (claims.argumentsHash !== hashArguments(argumentsValue)) {
+    return invalidState('arguments_mismatch')
   }
 
   const responses = isObject(paramsValue.inputResponses) ? paramsValue.inputResponses : {}
@@ -101,7 +134,13 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
   if (action === 'accept') {
     const content = isObject(approval.content) ? approval.content : {}
     if (content.confirmation !== true) {
-      return { result: inputRequired(argumentsValue, ['confirmation']) }
+      return {
+        result: inputRequired(
+          argumentsValue,
+          ['confirmation'],
+          typeof input.clock === 'string' ? input.clock : undefined,
+        ),
+      }
     }
     let structuredContent: Record<string, unknown>
     if (typeof input.requestState_bytes === 'string') {
@@ -147,5 +186,11 @@ export function handleMrtr(paramsValue: unknown, inputValue: unknown): MrtrRespo
       },
     }
   }
-  return { result: inputRequired(argumentsValue) }
+  return {
+    result: inputRequired(
+      argumentsValue,
+      undefined,
+      typeof input.clock === 'string' ? input.clock : undefined,
+    ),
+  }
 }
