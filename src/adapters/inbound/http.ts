@@ -1,6 +1,6 @@
+import { discover } from '../../application/discover.js'
 import { decodeHeaderValue } from '../../client/http.js'
 import { isJsonRpcNotification, isJsonRpcRequest, isObject } from '../../protocol/schema.js'
-import { discoveryResult } from '../../protocol/version.js'
 
 function response(status: number, body: unknown, headers: Record<string, string> = {}): unknown {
   return {
@@ -140,5 +140,5 @@ export function handleHttp(
       }
     }
   }
-  return response(200, { jsonrpc: '2.0', id: body.id, result: discoveryResult() })
+  return response(200, { jsonrpc: '2.0', id: body.id, result: discover() })
 }
