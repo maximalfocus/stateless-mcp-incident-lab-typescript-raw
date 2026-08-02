@@ -74,7 +74,9 @@ describe('reachable defensive paths', () => {
     expect(verifyRequestState(signed)).toEqual(claims)
     expect(verifyRequestState('bad')).toBeUndefined()
     expect(verifyRequestState(`${signed}.extra`)).toBeUndefined()
-    expect(verifyRequestState(`${signed.slice(0, -1)}x`)).toBeUndefined()
+    expect(
+      verifyRequestState(`${signed.startsWith('A') ? 'B' : 'A'}${signed.slice(1)}`),
+    ).toBeUndefined()
 
     for (const value of [null, {}, { method: 'x' }, { method: 'x', argumentsHash: 'y' }]) {
       expect(
