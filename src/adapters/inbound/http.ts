@@ -25,6 +25,7 @@ export function handleHttp(
   void seedValue
   void inputValue
   if (!isObject(requestValue)) throw new TypeError('HTTP request must be an object')
+  if (requestValue.method !== 'POST') return response(405, null, { Allow: 'POST' })
   const body = requestValue.body
   if (Array.isArray(body)) return response(400, invalidRequest())
   if (isJsonRpcNotification(body)) return response(202, null)
