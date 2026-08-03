@@ -433,7 +433,8 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
       const body = isRecord(request.body) ? request.body : {}
       const params = isRecord(body.params) ? body.params : {}
       const echoed =
-        typeof params.requestState === 'string' && params.requestState === input.requestState_bytes
+        typeof params.requestState === 'string' &&
+        verifyRequestState(params.requestState) !== undefined
       return { ...observationObject, observations: { request_state_echoed_exactly: echoed } }
     }
     if (fixture.test.spec_id === 'MRTR-016') {
