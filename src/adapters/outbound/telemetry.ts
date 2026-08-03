@@ -39,17 +39,20 @@ export function captureTrace(
   }
   if (input.operation === 'capture_logs') {
     if (Array.isArray(input.sensitive_values)) {
+      const record = {
+        method: typeof body.method === 'string' ? body.method : '',
+        name: typeof params.name === 'string' ? '[REDACTED]' : '',
+        request_id: body.id,
+        result_type: 'complete',
+      }
+      const emitted = JSON.stringify(record)
+      const sensitiveValues = input.sensitive_values.filter(
+        (value): value is string => typeof value === 'string',
+      )
       return {
         observations: {
-          records: [
-            {
-              method: typeof body.method === 'string' ? body.method : '',
-              name: typeof params.name === 'string' ? '[REDACTED]' : '',
-              request_id: body.id,
-              result_type: 'complete',
-            },
-          ],
-          absent_values: ['INCIDENT-SECRET', 'SIGNED-STATE', 'approve=true'],
+          records: [record],
+          absent_values: sensitiveValues.filter((value) => !emitted.includes(value)),
         },
       }
     }

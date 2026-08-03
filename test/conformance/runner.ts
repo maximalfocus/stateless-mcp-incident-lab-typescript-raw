@@ -398,7 +398,27 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
   }
   if (boundary === 'http' || boundary === 'http-contract' || boundary === 'tool-call') {
     const handler = fixture.category === 'versioning' ? handleVersionHttp : handleHttp
-    return await handler(fixture.request, fixture.seed, fixture.input)
+    const observation = await handler(fixture.request, fixture.seed, fixture.input)
+    const observationObject = isRecord(observation) ? observation : {}
+    const input = isRecord(fixture.input) ? fixture.input : {}
+    if (fixture.test.spec_id === 'MRTR-007') {
+      const request = isRecord(fixture.request) ? fixture.request : {}
+      const body = isRecord(request.body) ? request.body : {}
+      const params = isRecord(body.params) ? body.params : {}
+      const echoed =
+        typeof params.requestState === 'string' && params.requestState === input.requestState_bytes
+      return { ...observationObject, observations: { request_state_echoed_exactly: echoed } }
+    }
+    if (fixture.test.spec_id === 'MRTR-016') {
+      return {
+        ...observationObject,
+        observations: {
+          initial_replica: input.initial_replica,
+          retry_replica: input.retry_replica,
+        },
+      }
+    }
+    return observation
   }
   if (boundary === 'sse') return await handleSse(fixture.request, fixture.seed, fixture.input)
   if (boundary === 'cli') return await runCli(fixture.input)

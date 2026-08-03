@@ -173,29 +173,10 @@ export async function handleMrtr(
         : effectStore.claimAndMitigate === undefined
           ? await effectStore.claim(remediationId, signal)
           : await effectStore.claimAndMitigate(incidentId, remediationId, signal)
-    let structuredContent: Record<string, unknown>
-    // Pinned MRTR assurance fixtures observe transport invariants through fixture-only fields that
-    // the live server never supplies; keep these oracle adapters isolated from production output.
-    if (typeof input.requestState_bytes === 'string') {
-      structuredContent = {
-        request_state_echoed_exactly: requestState === input.requestState_bytes,
-        effect_count: effectApplied ? 1 : 0,
-      }
-    } else if (
-      typeof input.initial_replica === 'string' &&
-      typeof input.retry_replica === 'string'
-    ) {
-      structuredContent = {
-        initial_replica: input.initial_replica,
-        retry_replica: input.retry_replica,
-        effect_count: effectApplied ? 1 : 0,
-      }
-    } else {
-      structuredContent = {
-        remediation_id: remediationId,
-        status: 'EXECUTED',
-        effect_count: effectApplied ? 1 : 0,
-      }
+    const structuredContent = {
+      remediation_id: remediationId,
+      status: 'EXECUTED',
+      effect_count: effectApplied ? 1 : 0,
     }
     return {
       result: {
@@ -209,19 +190,14 @@ export async function handleMrtr(
   }
 
   if (action === 'decline' || action === 'cancel') {
-    // The pinned MRTR-009/010 oracle expects DECLINE/CANCEL, while the independently pinned
-    // tools/list output schema advertises DECLINED/CANCELLED. Live requests are identifiable by
-    // measured body bytes and must conform to the public schema; retain singular values only for
-    // the fixture adapter until the sibling conformance conflict is reconciled.
-    const fixtureStatus = action === 'decline' ? 'DECLINE' : 'CANCEL'
-    const liveStatus = action === 'decline' ? 'DECLINED' : 'CANCELLED'
+    const status = action === 'decline' ? 'DECLINED' : 'CANCELLED'
     return {
       result: {
         resultType: 'complete',
         content: [{ type: 'text', text: 'Remediation not executed.' }],
         structuredContent: {
           remediation_id: remediationId,
-          status: typeof input.body_bytes === 'number' ? liveStatus : fixtureStatus,
+          status,
           effect_count: 0,
         },
         isError: false,

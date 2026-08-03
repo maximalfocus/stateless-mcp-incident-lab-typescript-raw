@@ -17,6 +17,16 @@ export function diagnosticEvents(id: string | number, progressToken: string | nu
       params: { progressToken, progress: value, total: 100 },
     },
   })
+  const structuredContent = {
+    diagnostic_id: 'DIAGNOSTIC-001',
+    findings: [
+      {
+        code: 'DB_LATENCY',
+        service_id: 'api',
+        summary: 'Database dependency latency is elevated',
+      },
+    ],
+  }
   return [
     progress(0),
     progress(50),
@@ -27,8 +37,8 @@ export function diagnosticEvents(id: string | number, progressToken: string | nu
         id,
         result: {
           resultType: 'complete',
-          content: [{ type: 'text', text: 'Diagnostic complete.' }],
-          structuredContent: { diagnostic_id: 'DIAGNOSTIC-001' },
+          content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+          structuredContent,
           isError: false,
           _meta: META,
         },

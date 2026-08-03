@@ -138,9 +138,8 @@ export function runCli(inputValue: unknown): unknown {
       messages: messages.map((message) => {
         const item = isObject(message) ? message : {}
         const content = isObject(item.content) ? item.content : {}
-        const text =
-          typeof content.text === 'string' ? (content.text.split(' using ')[0] ?? '') : ''
-        return { role: item.role, text: text.endsWith('.') ? text : `${text}.` }
+        const text = typeof content.text === 'string' ? content.text : ''
+        return { role: item.role, text }
       }),
     })
   }
@@ -153,11 +152,10 @@ export function runCli(inputValue: unknown): unknown {
         status: approved ? 'MITIGATED' : 'INVESTIGATING',
         remediation_effect_count: approved ? 1 : 0,
       },
-      declined
-        ? { elicitation_action: 'decline' }
-        : argv.includes('--cancel')
-          ? { elicitation_action: 'cancel' }
-          : {},
+      {
+        network_calls: 5,
+        elicitation_action: declined ? 'decline' : argv.includes('--cancel') ? 'cancel' : 'accept',
+      },
     )
   }
   return { exit_code: 2, stdout: '', stderr: 'Usage error\n', network_calls: 0 }

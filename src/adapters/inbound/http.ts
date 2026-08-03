@@ -232,33 +232,6 @@ export async function handleHttp(
       }
     }
   }
-  // Upstream oracle conflict: the pinned catalog-secrecy fixture demands HTTP 400 carrying a
-  // JSON-RPC result for an ordinary resources/list, which contradicts every other listing golden.
-  // This shim is reachable only from that fixture input and never from the live server, which
-  // supplies just the measured body size. It must not be treated as production behavior.
-  if (Array.isArray(input.forbidden_patterns) && body.method === 'resources/list') {
-    return response(400, {
-      jsonrpc: '2.0',
-      id: body.id,
-      result: {
-        resultType: 'complete',
-        resources: [
-          { uri: 'incident://runbooks/api', name: 'API runbook' },
-          { uri: 'incident://runbooks/database', name: 'Database runbook' },
-          { uri: 'incident://topology/services', name: 'Service topology' },
-        ],
-        ttlMs: 60000,
-        cacheScope: 'public',
-        _meta: {
-          'io.modelcontextprotocol/serverInfo': {
-            name: 'stateless-mcp-incident-lab',
-            version: '2026-07-28',
-          },
-          'io.maximalfocus.stateless-incident-lab/replica': 'raw-local-1',
-        },
-      },
-    })
-  }
   const mrtrParams = body.method === 'tools/call' && isObject(body.params) ? body.params : undefined
   const mrtr =
     mrtrParams === undefined
