@@ -1,16 +1,22 @@
+import { randomUUID } from 'node:crypto'
+import { primitiveResult } from '../../application/catalogs.js'
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const TOOL_NAMES = [
-  'create_incident',
-  'execute_remediation',
-  'get_incident',
-  'propose_remediation',
-  'query_telemetry',
-  'resolve_incident',
-  'run_diagnostic',
-]
+function catalog(method: string, params: Record<string, unknown> = {}): Record<string, unknown> {
+  const result = primitiveResult(method, params)
+  if (result === undefined) throw new RangeError(`Unsupported CLI catalog request: ${method}`)
+  return result
+}
+
+function jsonArguments(argv: readonly string[]): Record<string, unknown> {
+  const marker = argv.indexOf('--json')
+  if (marker < 0 || typeof argv[marker + 1] !== 'string') return {}
+  const value = JSON.parse(argv[marker + 1] ?? '{}') as unknown
+  return isObject(value) ? value : {}
+}
 
 function output(value: unknown, extras: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -47,54 +53,72 @@ export function runCli(inputValue: unknown): unknown {
   }
   if (group === 'discover') return output({ supportedVersions: ['2026-07-28'] })
   if (group === 'tools' && action === 'list') {
+    const toolsValue = catalog('tools/list').tools
+    const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
     return output(
-      { tools: TOOL_NAMES },
+      { tools: tools.map((tool) => (isObject(tool) ? tool.name : undefined)) },
       noCache
         ? { cache_reads: 0, cache_writes: 0, case_exit_codes: classifyCases(inputValue.cases) }
         : {},
     )
   }
   if (group === 'tools' && action === 'inspect') {
+    const toolsValue = catalog('tools/list').tools
+    const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
+    const tool = tools.find((value) => isObject(value) && value.name === argv[3])
+    if (!isObject(tool))
+      return { exit_code: 3, stdout: '', stderr: 'Unknown tool\n', network_calls: 1 }
     return output({
-      name: argv[3],
-      inputSchema: { type: 'object' },
-      outputSchema: { type: 'object' },
+      name: tool.name,
+      inputSchema: { type: isObject(tool.inputSchema) ? tool.inputSchema.type : undefined },
+      outputSchema: { type: isObject(tool.outputSchema) ? tool.outputSchema.type : undefined },
     })
   }
-  if (group === 'tools' && action === 'call' && argv[3] === 'create_incident') {
-    return output({
-      incident_id: '00000000-0000-4000-8000-000000000001',
-      status: 'OPEN',
-      expires_at: '2026-08-02T01:00:00Z',
-    })
+  if (group === 'tools' && action === 'call' && typeof argv[3] === 'string') {
+    const result = catalog('tools/call', { name: argv[3], arguments: jsonArguments(original) })
+    return output(isObject(result.structuredContent) ? result.structuredContent : {})
   }
   if (group === 'resources' && action === 'list') {
+    const resources = catalog('resources/list').resources
     return output({
-      resources: [
-        'incident://runbooks/api',
-        'incident://runbooks/database',
-        'incident://topology/services',
-      ],
+      resources: Array.isArray(resources)
+        ? resources.map((resource) => (isObject(resource) ? resource.uri : undefined))
+        : [],
     })
   }
   if (group === 'resources' && action === 'templates') {
+    const templates = catalog('resources/templates/list').resourceTemplates
     return output({
-      resourceTemplates: [
-        'incident://incidents/{incident_id}/timeline',
-        'incident://runbooks/{service_id}',
-      ],
+      resourceTemplates: Array.isArray(templates)
+        ? templates.map((template) => (isObject(template) ? template.uriTemplate : undefined))
+        : [],
     })
   }
-  if (group === 'resources' && action === 'read') {
-    return output({ uri: argv[3], mimeType: 'application/json' })
+  if (group === 'resources' && action === 'read' && typeof argv[3] === 'string') {
+    const contents = catalog('resources/read', { uri: argv[3] }).contents
+    const content = Array.isArray(contents) && isObject(contents[0]) ? contents[0] : {}
+    return output({ uri: content.uri, mimeType: content.mimeType })
   }
   if (group === 'prompts' && action === 'list') {
-    return output({ prompts: ['triage_incident', 'review_remediation'] })
+    const prompts = catalog('prompts/list').prompts
+    return output({
+      prompts: Array.isArray(prompts)
+        ? prompts.map((prompt) => (isObject(prompt) ? prompt.name : undefined))
+        : [],
+    })
   }
-  if (group === 'prompts' && action === 'get') {
+  if (group === 'prompts' && action === 'get' && typeof argv[3] === 'string') {
+    const result = catalog('prompts/get', { name: argv[3], arguments: jsonArguments(original) })
+    const messages = Array.isArray(result.messages) ? result.messages : []
     return output({
       name: argv[3],
-      messages: [{ role: 'user', text: 'Investigate incident INCIDENT-OPEN.' }],
+      messages: messages.map((message) => {
+        const item = isObject(message) ? message : {}
+        const content = isObject(item.content) ? item.content : {}
+        const text =
+          typeof content.text === 'string' ? (content.text.split(' using ')[0] ?? '') : ''
+        return { role: item.role, text: text.endsWith('.') ? text : `${text}.` }
+      }),
     })
   }
   if (group === 'demo') {
@@ -102,7 +126,7 @@ export function runCli(inputValue: unknown): unknown {
     const declined = argv.includes('--decline')
     return output(
       {
-        incident_id: '00000000-0000-4000-8000-000000000001',
+        incident_id: randomUUID(),
         status: approved ? 'MITIGATED' : 'INVESTIGATING',
         remediation_effect_count: approved ? 1 : 0,
       },

@@ -1,13 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { main, matchValue, validateExpected, validateMetadata } from './runner.js'
 
 describe('raw conformance replay', () => {
   it('passes the complete selected lane in-process', async () => {
     const original = process.argv
     process.argv = ['node', 'runner.ts', '--lane', 'raw']
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...values) => {
+      lines.push(values.map(String).join(' '))
+    })
     try {
       expect(await main()).toBe(0)
+      expect(lines.filter((line) => line.startsWith('PASS '))).toHaveLength(160)
+      expect(lines.filter((line) => line.startsWith('SKIP '))).toHaveLength(37)
     } finally {
+      log.mockRestore()
       process.argv = original
     }
   })

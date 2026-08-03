@@ -74,14 +74,18 @@ export function executeFunction(inputValue: unknown): unknown {
   if (inputValue.operation === 'generate_incident_handle') {
     const source = isObject(inputValue.id_source) ? inputValue.id_source : {}
     const hex = typeof source.fixture_bytes === 'string' ? source.fixture_bytes : ''
+    if (!/^[0-9a-f]{32}$/i.test(hex)) throw new TypeError('UUID source must contain 16 bytes')
+    const version = Number.parseInt(hex[12] ?? '', 16)
+    const variantByte = Number.parseInt(hex.slice(16, 18), 16)
+    const variant = (variantByte & 0xc0) === 0x80 ? 'RFC4122' : 'unsupported'
     const incidentId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
     const now = typeof inputValue.clock === 'string' ? Date.parse(inputValue.clock) : Number.NaN
     const ttl = typeof inputValue.ttl_ms === 'number' ? inputValue.ttl_ms : 0
     return {
       incident_id: incidentId,
-      version: 4,
-      variant: 'RFC4122',
-      entropy_bits: 122,
+      version,
+      variant,
+      entropy_bits: 128 - 4 - 2,
       expires_at: new Date(now + ttl).toISOString().replace('.000Z', 'Z'),
     }
   }

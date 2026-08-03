@@ -60,12 +60,18 @@ function inputRequired(
 }
 
 export type MrtrResponse = { result: Record<string, unknown> } | { error: Record<string, unknown> }
+type RemediationValidator = (
+  incidentId: string,
+  remediationId: string,
+  signal?: AbortSignal,
+) => Promise<Record<string, unknown> | undefined>
 
 export async function handleMrtr(
   paramsValue: unknown,
   inputValue: unknown,
   effectStore?: EffectStore,
   signal?: AbortSignal,
+  validateRemediation?: RemediationValidator,
 ): Promise<MrtrResponse | undefined> {
   if (!isObject(paramsValue) || paramsValue.name !== 'execute_remediation') return undefined
   const input = isObject(inputValue) ? inputValue : {}
@@ -85,6 +91,12 @@ export async function handleMrtr(
   }
 
   if (requestState === undefined) {
+    const invalidRemediation = await validateRemediation?.(
+      String(argumentsValue.incident_id),
+      String(argumentsValue.remediation_id),
+      signal,
+    )
+    if (invalidRemediation !== undefined) return { result: { ...invalidRemediation, _meta: META } }
     const meta = isObject(paramsValue._meta) ? paramsValue._meta : {}
     const capabilities = isObject(meta['io.modelcontextprotocol/clientCapabilities'])
       ? meta['io.modelcontextprotocol/clientCapabilities']
@@ -128,6 +140,12 @@ export async function handleMrtr(
   if (claims.argumentsHash !== hashArguments(argumentsValue)) {
     return invalidState('arguments_mismatch')
   }
+  const invalidRemediation = await validateRemediation?.(
+    String(argumentsValue.incident_id),
+    String(argumentsValue.remediation_id),
+    signal,
+  )
+  if (invalidRemediation !== undefined) return { result: { ...invalidRemediation, _meta: META } }
 
   const responses = isObject(paramsValue.inputResponses) ? paramsValue.inputResponses : {}
   const approval = isObject(responses.approval) ? responses.approval : {}

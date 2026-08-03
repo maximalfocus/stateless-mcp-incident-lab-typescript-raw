@@ -425,6 +425,19 @@ describe('raw entry point', () => {
     })
   })
 
+  it('validates signed request state before looking up remediation ownership', async () => {
+    const base = await launch({ incidentStore: new MemoryIncidentStore() })
+    const response = await rpcCall(base + '/raw/mcp', 'tools/call', {
+      name: 'execute_remediation',
+      arguments: { incident_id: 'missing', remediation_id: 'forged' },
+      requestState: 'tampered',
+      inputResponses: {
+        approval: { action: 'accept', content: { decision: 'accept', confirmation: true } },
+      },
+    })
+    expect(response).toMatchObject({ error: { code: -32602, data: { reason: 'tampered' } } })
+  })
+
   it('rejects execution for an unproposed remediation before claiming an effect', async () => {
     const claim = vi.fn(() => Promise.resolve(true))
     const base = await launch({ effectStore: { claim, ready: () => Promise.resolve(true) } })
@@ -593,6 +606,30 @@ describe('raw entry point', () => {
     expect(requestIds).toEqual([1, 2])
   })
 
+  it('accepts the documented --json marker on the network CLI', async () => {
+    clearResponseCache()
+    const store = new MemoryIncidentStore()
+    const base = await launch({ incidentStore: store })
+    const output: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output.push(String(chunk))
+      return true
+    })
+    expect(
+      await runNetworkCli([
+        'tools',
+        'call',
+        `${base}/raw/mcp`,
+        'create_incident',
+        '--json',
+        JSON.stringify({ title: 'API latency', severity: 'high', suspected_services: ['api'] }),
+      ]),
+    ).toBe(0)
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+      structuredContent: { status: 'OPEN' },
+    })
+  })
+
   it('walks opaque list cursors, including the empty string, to a complete CLI snapshot', async () => {
     clearResponseCache()
     const requests: Array<Record<string, unknown>> = []
@@ -632,6 +669,106 @@ describe('raw entry point', () => {
       ttlMs: 50,
       cacheScope: 'public',
     })
+  })
+
+  it('serves a stale list snapshot with a warning when the forced refresh fails', async () => {
+    clearResponseCache()
+    const output: string[] = []
+    const warnings: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output.push(String(chunk))
+      return true
+    })
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      warnings.push(String(chunk))
+      return true
+    })
+    let online: boolean = true
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (!online) return Promise.reject(new Error('fetch failed'))
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              resultType: 'complete',
+              tools: [{ name: 'cached' }],
+              ttlMs: 0,
+              cacheScope: 'public',
+            },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+    expect(await runNetworkCli(['tools', 'list', 'https://stale.test/raw/mcp'])).toBe(0)
+    online = false
+    output.length = 0
+    expect(await runNetworkCli(['tools', 'list', 'https://stale.test/raw/mcp'])).toBe(0)
+    expect(warnings.join('')).toContain('Refresh failed; serving stale cached data.')
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ tools: [{ name: 'cached' }] })
+    clearResponseCache()
+  })
+
+  it('bounds a server-controlled list cursor walk', async () => {
+    clearResponseCache()
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    let page = 0
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      page += 1
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              resultType: 'complete',
+              tools: [],
+              nextCursor: `cursor-${String(page)}`,
+              ttlMs: 0,
+              cacheScope: 'public',
+            },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+    expect(await runNetworkCli(['tools', 'list', 'https://endless.test/raw/mcp'])).toBe(5)
+    expect(fetchMock).toHaveBeenCalledTimes(100)
+    clearResponseCache()
+  })
+
+  it('reports a JSON-RPC error from tools inspect instead of a null tool', async () => {
+    clearResponseCache()
+    const errors: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk))
+      return true
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            error: { code: -32603, message: 'Internal error' },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+    expect(
+      await runNetworkCli(['tools', 'inspect', 'https://broken.test/raw/mcp', 'run_diagnostic']),
+    ).toBe(3)
+    expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ code: -32603 })
   })
 
   it('rejects malformed, cyclic, and cache-scope-inconsistent list pages', async () => {

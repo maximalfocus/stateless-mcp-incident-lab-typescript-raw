@@ -246,8 +246,9 @@ export function runStateMachine(inputValue: unknown): unknown {
 
   if (actions[0] === 'create_incident') {
     state = 'OPEN'
-    observations.incident_id = '00000000-0000-4000-8000-000000000001'
-    observations.expires_at = '2026-08-02T01:00:00Z'
+    const now = typeof inputValue.clock === 'string' ? Date.parse(inputValue.clock) : Date.now()
+    observations.incident_id = randomUUID()
+    observations.expires_at = new Date(now + 60 * 60_000).toISOString().replace('.000Z', 'Z')
     observations.id_strength = 'uuid-v4-or-stronger'
   } else if (
     state === undefined &&
@@ -263,7 +264,7 @@ export function runStateMachine(inputValue: unknown): unknown {
         continue
       }
       if (action === 'propose_remediation' && state === 'INVESTIGATING') {
-        observations.remediation_id = 'REMEDIATION-001'
+        observations.remediation_id = randomUUID()
         observations.effect = 'simulated'
         observations.status = 'PROPOSED'
         continue

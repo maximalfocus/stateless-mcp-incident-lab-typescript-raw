@@ -8,9 +8,13 @@ type RpcOptions = {
   wire?: boolean
   warning?: (message: string) => void
   stale?: { seen: boolean }
+  staleOnly?: boolean
 }
 
 const responseCache = new ResponseCache<JsonRpcResponse>()
+
+// Bounds an otherwise server-controlled cursor walk; the lab catalogs are a single page.
+const MAX_LIST_PAGES = 100
 
 export function clearResponseCache(): void {
   responseCache.clear()
@@ -70,6 +74,12 @@ export async function rpcCall(
 ): Promise<JsonRpcResponse> {
   const sourceParams = object(paramsValue)
   const key = `${url}|${cacheKey(method, sourceParams)}`
+  if (options.staleOnly === true) {
+    const stale = responseCache.get(key, true)
+    if (stale === undefined) throw new Error(`No complete stale snapshot for ${method}`)
+    if (options.stale !== undefined) options.stale.seen = true
+    return stale
+  }
   if (options.noCache !== true) {
     const cached = responseCache.get(key)
     if (cached !== undefined) return cached
@@ -190,7 +200,7 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     if (field === undefined) throw new TypeError(`Unsupported list method ${method}`)
     const silentOptions = { ...options }
     delete silentOptions.warning
-    for (let attempt = 0; ; attempt += 1) {
+    const walk = async (pageOptions: RpcOptions): Promise<JsonRpcResponse> => {
       const items: unknown[] = []
       const seenCursors = new Set<string>()
       let cursor: string | undefined
@@ -198,16 +208,17 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
       let aggregate: Record<string, unknown> | undefined
       let cacheScope: string | undefined
       let minimumTtl = Number.POSITIVE_INFINITY
-      const stale = { seen: false }
       do {
+        if (pageNumber >= MAX_LIST_PAGES) {
+          throw new TypeError(`${method} exceeded ${String(MAX_LIST_PAGES)} pages`)
+        }
         const response = await rpcCall(
           url,
           method,
           cursor === undefined ? {} : { cursor },
           pageNumber + 1,
-          attempt === 0 ? { ...silentOptions, stale } : { ...options, noCache: true },
+          pageOptions,
         )
-        if (stale.seen) break
         if (response.error !== undefined) return response
         const page = object(response.result)
         if (!Array.isArray(page[field]) || page.resultType !== 'complete') {
@@ -231,7 +242,6 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
         }
         pageNumber += 1
       } while (cursor !== undefined)
-      if (stale.seen) continue
       return {
         result: {
           ...aggregate,
@@ -242,8 +252,33 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
         },
       }
     }
+    const stale = { seen: false }
+    let firstWalk: JsonRpcResponse | undefined
+    try {
+      firstWalk = await walk({ ...silentOptions, stale })
+    } catch (error) {
+      if (!stale.seen) throw error
+    }
+    if (!stale.seen && firstWalk !== undefined) return firstWalk
+    let staleWalk: JsonRpcResponse | undefined
+    try {
+      // Rebuild the fallback exclusively from cached pages; never mix stale and fresh pages.
+      staleWalk = await walk({ ...silentOptions, staleOnly: true })
+    } catch {
+      // A partial cached list is not a valid snapshot and must never be returned.
+    }
+    try {
+      // A stale page invalidates the whole walk, so re-fetch every cursor over the network.
+      return await walk({ ...options, noCache: true })
+    } catch (error) {
+      if (staleWalk === undefined) throw error
+      options.warning?.('Refresh failed; serving stale cached data.')
+      return staleWalk
+    }
   }
-  const filtered = argv.filter((value) => value !== '--wire' && value !== '--no-cache')
+  const filtered = argv.filter(
+    (value) => value !== '--wire' && value !== '--no-cache' && value !== '--json',
+  )
   const [group, action, url, name, rawArguments] = filtered
   if (group === undefined || action === undefined) return 2
   try {
@@ -290,10 +325,12 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     else if (group === 'tools' && action === 'list') response = await list(url, 'tools/list')
     else if (group === 'tools' && action === 'inspect') {
       response = await list(url, 'tools/list')
-      const toolsValue = object(response.result).tools
-      const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
-      write(tools.find((tool) => object(tool).name === name) ?? null)
-      return 0
+      if (response.error === undefined) {
+        const toolsValue = object(response.result).tools
+        const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
+        write(tools.find((tool) => object(tool).name === name) ?? null)
+        return 0
+      }
     } else if (group === 'tools' && action === 'call' && name !== undefined) {
       response = await call(url, 'tools/call', { name, arguments: parseObject(rawArguments) })
     } else if (group === 'resources' && action === 'list') {

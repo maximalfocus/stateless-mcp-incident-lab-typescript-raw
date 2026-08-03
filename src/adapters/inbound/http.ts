@@ -256,28 +256,19 @@ export async function handleHttp(
     })
   }
   const mrtrParams = body.method === 'tools/call' && isObject(body.params) ? body.params : undefined
-  if (
-    mrtrParams?.name === 'execute_remediation' &&
-    incidentService !== undefined &&
-    isObject(mrtrParams.arguments) &&
-    typeof mrtrParams.arguments.incident_id === 'string' &&
-    typeof mrtrParams.arguments.remediation_id === 'string'
-  ) {
-    const invalidRemediation = await incidentService.validateRemediation(
-      mrtrParams.arguments.incident_id,
-      mrtrParams.arguments.remediation_id,
-      signal,
-    )
-    if (invalidRemediation !== undefined) {
-      return response(200, {
-        jsonrpc: '2.0',
-        id: body.id,
-        result: { ...invalidRemediation, _meta: catalogMeta() },
-      })
-    }
-  }
   const mrtr =
-    mrtrParams === undefined ? undefined : await handleMrtr(mrtrParams, input, effectStore, signal)
+    mrtrParams === undefined
+      ? undefined
+      : await handleMrtr(
+          mrtrParams,
+          input,
+          effectStore,
+          signal,
+          incidentService === undefined
+            ? undefined
+            : async (incidentId, remediationId, requestSignal) =>
+                await incidentService.validateRemediation(incidentId, remediationId, requestSignal),
+        )
   if (mrtr !== undefined) {
     if (incidentService !== undefined && 'result' in mrtr) {
       const params = isObject(body.params) ? body.params : {}

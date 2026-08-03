@@ -33,6 +33,10 @@ function globRegex(glob: string): RegExp {
   return new RegExp(`${source}$`)
 }
 
+// Every extension `tsc` compiles into the shipped bundle must be scanned, or a module edge
+// declared in a `.mts`/`.cts` sibling would silently escape the boundary assertions.
+const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts'])
+
 async function sourceFiles(root: string): Promise<string[]> {
   const files: string[] = []
   async function walk(dir: string): Promise<void> {
@@ -40,7 +44,7 @@ async function sourceFiles(root: string): Promise<string[]> {
       if (entry.name === 'node_modules' || entry.name === 'dist') continue
       const path = join(dir, entry.name)
       if (entry.isDirectory()) await walk(path)
-      else if (entry.isFile() && ['.ts', '.tsx'].includes(extname(entry.name))) files.push(path)
+      else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name))) files.push(path)
     }
   }
   await walk(join(root, 'src'))
@@ -59,11 +63,24 @@ function stringLiteral(node: ts.Node | undefined): string | undefined {
 function importsOf(path: string, text: string): ModuleEdge[] {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const imports: ModuleEdge[] = []
+  const requireAliases = new Set<string>()
+  const isCreateRequireCall = (node: ts.Node): node is ts.CallExpression =>
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'createRequire'
   function add(kind: string, node: ts.Node | undefined): void {
     const specifier = stringLiteral(node)
     imports.push(specifier === undefined ? { kind } : { kind, specifier })
   }
   function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      isCreateRequireCall(node.initializer)
+    ) {
+      requireAliases.add(node.name.text)
+    }
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       if (node.moduleSpecifier !== undefined) add(ts.SyntaxKind[node.kind], node.moduleSpecifier)
     } else if (
@@ -78,9 +95,29 @@ function importsOf(path: string, text: string): ModuleEdge[] {
       )
     } else if (ts.isCallExpression(node)) {
       const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
-      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require'
-      if (isDynamicImport || isRequire) {
-        add(isDynamicImport ? 'dynamic import' : 'require', node.arguments[0])
+      const isRequire =
+        (ts.isIdentifier(node.expression) &&
+          (node.expression.text === 'require' || requireAliases.has(node.expression.text))) ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          (node.expression.expression.text === 'require' ||
+            requireAliases.has(node.expression.expression.text)) &&
+          node.expression.name.text === 'resolve') ||
+        isCreateRequireCall(node.expression)
+      const isImportMetaResolve =
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isMetaProperty(node.expression.expression) &&
+        node.expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+        node.expression.name.text === 'resolve'
+      if (isDynamicImport || isRequire || isImportMetaResolve) {
+        add(
+          isDynamicImport
+            ? 'dynamic import'
+            : isImportMetaResolve
+              ? 'import.meta.resolve'
+              : 'require',
+          node.arguments[0],
+        )
       }
     }
     ts.forEachChild(node, visit)
@@ -92,7 +129,7 @@ function importsOf(path: string, text: string): ModuleEdge[] {
 function canonicalImport(root: string, from: string, specifier: string): string {
   if (!specifier.startsWith('.')) return specifier
   let path = slash(relative(root, resolve(dirname(from), specifier)))
-  path = path.replace(/\.(?:ts|tsx|js|jsx)$/, '').replace(/\/index$/, '')
+  path = path.replace(/\.(?:[cm]?ts|tsx|[cm]?js|jsx)$/, '').replace(/\/index$/, '')
   return path
 }
 
@@ -235,6 +272,10 @@ async function selfTest(): Promise<void> {
       "export type Incident = import('../domain/incidents/internal.js').Incident\n",
       "const target = '../domain/incidents/internal.js'; import(target)\n",
       "const target = '../domain/incidents/internal.js'; require(target)\n",
+      "const path = require.resolve('../domain/incidents/internal.js')\n",
+      "import { createRequire } from 'node:module'; const req = createRequire(import.meta.url); req('../domain/incidents/internal.js')\n",
+      "import { createRequire } from 'node:module'; createRequire(import.meta.url)('../domain/incidents/internal.js')\n",
+      "const path = import.meta.resolve('../domain/incidents/internal.js')\n",
     ]
     for (const form of forbiddenForms) {
       await writeFile(bad, form)
@@ -245,6 +286,20 @@ async function selfTest(): Promise<void> {
         rejected = true
       }
       if (!rejected) throw new Error(`self-test: module edge was accepted: ${form}`)
+    }
+    await writeFile(bad, 'export const clean = 1\n')
+    await verifyArchitecture(boundary, root)
+    for (const extension of ['.mts', '.cts']) {
+      const sibling = join(root, `src/application/bad${extension}`)
+      await writeFile(sibling, "import '../domain/incidents/internal.js'\n")
+      let rejected = false
+      try {
+        await verifyArchitecture(boundary, root)
+      } catch {
+        rejected = true
+      }
+      await rm(sibling, { force: true })
+      if (!rejected) throw new Error(`self-test: ${extension} module edge was not scanned`)
     }
     const malformedAssertions: unknown[] = [
       { type: 'unknown', from_glob: 'src/**' },
@@ -261,7 +316,7 @@ async function selfTest(): Promise<void> {
       if (!rejected) throw new Error('self-test: malformed architecture assertion was accepted')
     }
     console.log(
-      `PASS architecture verifier rejected ${String(forbiddenForms.length)} module-edge forms and ${String(malformedAssertions.length)} malformed assertion shapes`,
+      `PASS architecture verifier rejected ${String(forbiddenForms.length)} module-edge forms across 4 TypeScript source extensions and ${String(malformedAssertions.length)} malformed assertion shapes`,
     )
   } finally {
     await rm(root, { recursive: true, force: true })

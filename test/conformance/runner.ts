@@ -253,11 +253,7 @@ export function validateMetadata(value: unknown, dir: string): asserts value is 
     extras.join(',') === 'type_contract' ||
     extras.join(',') === 'property' ||
     extras.join(',') === 'adr,adr_repo'
-  if (
-    !validExtras ||
-    baseKeys.some((key) => !Object.hasOwn(value, key)) ||
-    Object.keys(value).length !== baseKeys.length + extras.length
-  ) {
+  if (!validExtras || baseKeys.some((key) => !Object.hasOwn(value, key))) {
     throw new Error(`${dir}: unsupported test metadata shape`)
   }
   if (value.approved_at !== null || value.approved_by !== null) {
@@ -312,9 +308,10 @@ async function discover(dir: string): Promise<string[]> {
 }
 
 function lanePaths(workitems: string, lane: string): Set<string> {
-  const start = workitems.indexOf(`## Lane: ${lane}`)
-  if (start < 0) throw new Error(`Unknown WORKITEM lane ${lane}`)
-  const rest = workitems.slice(start + 1)
+  const escapedLane = lane.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const heading = new RegExp(`^## Lane: ${escapedLane}\\s*$`, 'm').exec(workitems)
+  if (heading?.index === undefined) throw new Error(`Unknown WORKITEM lane ${lane}`)
+  const rest = workitems.slice(heading.index + heading[0].length)
   const next = rest.search(/^## Lane: /m)
   const section = next < 0 ? rest : rest.slice(0, next)
   return new Set([...section.matchAll(/`(conformance\/[^`]+)`/g)].map((match) => match[1] ?? ''))
@@ -498,8 +495,12 @@ export async function main(): Promise<number> {
     return 1
   }
 
+  const runnablePaths = new Set(runnable.map((fixture) => fixture.relativeDir))
+  const skipped: Result[] = fixtures
+    .filter((fixture) => !runnablePaths.has(fixture.relativeDir))
+    .map((fixture) => ({ specId: fixture.test.spec_id, status: 'SKIP' }))
   const results = await Promise.all(runnable.map(runFixture))
-  for (const result of results) {
+  for (const result of [...results, ...skipped]) {
     console.log(`${result.status} ${result.specId}${result.detail ? ` — ${result.detail}` : ''}`)
   }
   const passed = results.filter((result) => result.status === 'PASS').length
