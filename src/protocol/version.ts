@@ -57,8 +57,11 @@ function remediationInputRequired(id: unknown): Record<string, unknown> {
             message: 'Approve simulated remediation?',
             requestedSchema: {
               type: 'object',
-              properties: { decision: { type: 'string', enum: ['accept', 'decline'] } },
-              required: ['decision'],
+              properties: {
+                decision: { type: 'string', enum: ['accept', 'decline'] },
+                confirmation: { type: 'boolean' },
+              },
+              required: ['decision', 'confirmation'],
             },
           },
         },
@@ -144,19 +147,6 @@ export function handleHttp(
   const requestedVersion = meta['io.modelcontextprotocol/protocolVersion']
   if (requestedVersion !== PROTOCOL_VERSION) {
     return jsonResponse(400, unsupportedVersion(id, String(requestedVersion)))
-  }
-  if (body.method === 'tools/list') {
-    return jsonResponse(200, {
-      jsonrpc: '2.0',
-      id,
-      result: {
-        resultType: 'complete',
-        tools: [],
-        ttlMs: 60000,
-        cacheScope: 'public',
-        _meta: serverMeta(),
-      },
-    })
   }
   return jsonResponse(200, { jsonrpc: '2.0', id, result: discoveryResult() })
 }

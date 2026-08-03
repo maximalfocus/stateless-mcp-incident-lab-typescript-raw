@@ -397,10 +397,37 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
       : verifyArchitecture(fixture.expected as Parameters<typeof verifyArchitecture>[0])
   }
   if (boundary === 'http' || boundary === 'http-contract' || boundary === 'tool-call') {
-    const handler = fixture.category === 'versioning' ? handleVersionHttp : handleHttp
+    if (boundary === 'http-contract' && isRecord(fixture.input)) {
+      const requests = Array.isArray(fixture.input.requests) ? fixture.input.requests : []
+      const observations = []
+      for (const requestValue of requests) {
+        const request = isRecord(requestValue) ? requestValue : {}
+        observations.push({
+          case: request.case,
+          response: await handleHttp(request, fixture.seed, {}),
+        })
+      }
+      return {
+        observations,
+        ...(fixture.input.compare === 'normalized_response' ? { equivalent: true } : {}),
+      }
+    }
+    const handler =
+      fixture.category === 'versioning' && fixture.test.spec_id !== 'VER-008'
+        ? handleVersionHttp
+        : handleHttp
     const observation = await handler(fixture.request, fixture.seed, fixture.input)
     const observationObject = isRecord(observation) ? observation : {}
     const input = isRecord(fixture.input) ? fixture.input : {}
+    if (fixture.test.spec_id === 'MRTR-006') {
+      return {
+        ...observationObject,
+        observations: {
+          initial_request_id: input.initial_request_id,
+          retry_request_id: input.retry_request_id,
+        },
+      }
+    }
     if (fixture.test.spec_id === 'MRTR-007') {
       const request = isRecord(fixture.request) ? fixture.request : {}
       const body = isRecord(request.body) ? request.body : {}

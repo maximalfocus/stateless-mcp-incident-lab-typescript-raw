@@ -16,6 +16,7 @@ export function discoverWithVersionRecovery(
       version,
       error: {
         code: -32022,
+        message: 'Unsupported protocol version',
         data: { requested: version, supported: [PROTOCOL_VERSION] },
       },
     })

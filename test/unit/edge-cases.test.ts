@@ -297,8 +297,9 @@ describe('reachable defensive paths', () => {
     }
   })
 
-  it('refuses unknown CLI handles instead of throwing', () => {
-    const call = (...argv: string[]): unknown => runCli({ argv: ['incident-mcp', ...argv] })
+  it('refuses unknown CLI handles instead of throwing', async () => {
+    const call = async (...argv: string[]): Promise<unknown> =>
+      await runCli({ argv: ['incident-mcp', ...argv] })
     const refused = [
       ['tools', 'call', 'u', 'nope'],
       ['tools', 'inspect', 'u', 'nope'],
@@ -306,8 +307,8 @@ describe('reachable defensive paths', () => {
       ['prompts', 'get', 'u', 'nope'],
       ['tools', 'call', 'u', 'create_incident', '--json', 'not json'],
     ]
-    for (const argv of refused) expect(call(...argv)).toMatchObject({ exit_code: 3 })
-    const runbook = call('resources', 'read', 'u', 'incident://runbooks/database')
+    for (const argv of refused) expect(await call(...argv)).toMatchObject({ exit_code: 3 })
+    const runbook = await call('resources', 'read', 'u', 'incident://runbooks/database')
     expect(runbook).toMatchObject({ exit_code: 0 })
   })
 

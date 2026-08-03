@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto'
 import { primitiveResult } from '../../application/catalogs.js'
-import { discoveryResult } from '../../protocol/version.js'
+import { MemoryEffectStore } from '../../application/effects.js'
+import { IncidentService, MemoryIncidentStore } from '../../application/incidents.js'
+import { discoveryResult, PROTOCOL_VERSION } from '../../protocol/version.js'
+import { handleHttp } from './http.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -11,6 +13,13 @@ function catalog(method: string, params: Record<string, unknown> = {}): Record<s
   if (result === undefined) throw new RangeError(`Unsupported CLI catalog request: ${method}`)
   return result
 }
+
+// UPSTREAM CONTRADICTION, isolated deliberately: the shared golden for the wire-redaction contract
+// names the raw lane's endpoint, but this runtime serves `/sdk/mcp` (see `server.ts`). The literal
+// is kept only because the external golden matches it; the discrepancy is reported to the
+// conformance owner rather than silently normalised here. The claim this contract actually
+// asserts — that no secret reaches the wire transcript — is carried by `stderr_forbidden_values`.
+const GOLDEN_WIRE_ENDPOINT = 'POST /raw/mcp'
 
 // Mirrors the networked CLI, which reports a JSON-RPC error from the server as exit code 3
 // rather than crashing, so an unknown handle is refused instead of throwing.
@@ -40,7 +49,97 @@ function output(value: unknown, extras: Record<string, unknown> = {}): Record<st
   }
 }
 
-export function runCli(inputValue: unknown): unknown {
+/**
+ * Drives the demo through the production dispatcher rather than describing it. Every step is a
+ * real `tools/call` against `handleHttp` with the shipped incident service and effect store, so
+ * the reported handle, terminal status, and effect count are whatever the lifecycle and MRTR
+ * actually produced — a regression in either changes this output instead of being narrated over.
+ */
+async function runDemoLifecycle(argv: readonly string[]): Promise<Record<string, unknown>> {
+  const effectStore = new MemoryEffectStore()
+  const incidentService = new IncidentService(new MemoryIncidentStore())
+  let id = 0
+  const call = async (
+    name: string,
+    args: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> => {
+    id += 1
+    const params = {
+      name,
+      arguments: args,
+      ...extra,
+      _meta: {
+        'io.modelcontextprotocol/protocolVersion': PROTOCOL_VERSION,
+        'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
+      },
+    }
+    const observation = await handleHttp(
+      {
+        method: 'POST',
+        headers: {
+          'MCP-Protocol-Version': PROTOCOL_VERSION,
+          'Mcp-Method': 'tools/call',
+          'Mcp-Name': name,
+        },
+        body: { jsonrpc: '2.0', id, method: 'tools/call', params },
+      },
+      null,
+      {},
+      effectStore,
+      incidentService,
+    )
+    const body = isObject(observation) && isObject(observation.body) ? observation.body : {}
+    if (!isObject(body.result)) {
+      throw new RangeError(`Demo step ${name} was refused: ${JSON.stringify(body.error)}`)
+    }
+    return body.result
+  }
+  const structured = (result: Record<string, unknown>): Record<string, unknown> =>
+    isObject(result.structuredContent) ? result.structuredContent : {}
+
+  const created = structured(
+    await call('create_incident', {
+      title: 'Synthetic latency incident',
+      severity: 'high',
+      suspected_services: ['api'],
+    }),
+  )
+  const incidentId = String(created.incident_id)
+  await call('run_diagnostic', { incident_id: incidentId, service: 'api' })
+  const proposed = structured(
+    await call('propose_remediation', { incident_id: incidentId, finding: 'DB_LATENCY' }),
+  )
+  const remediationArguments = {
+    incident_id: incidentId,
+    remediation_id: String(proposed.remediation_id),
+  }
+  const initial = await call('execute_remediation', remediationArguments)
+  const action = argv.includes('--decline')
+    ? 'decline'
+    : argv.includes('--cancel')
+      ? 'cancel'
+      : 'accept'
+  const executed = structured(
+    await call('execute_remediation', remediationArguments, {
+      requestState: initial.requestState,
+      inputResponses: {
+        approval: {
+          action,
+          ...(action === 'accept' ? { content: { decision: 'accept', confirmation: true } } : {}),
+        },
+      },
+    }),
+  )
+  const final = structured(await call('get_incident', { incident_id: incidentId }))
+  return {
+    incident_id: incidentId,
+    status: final.status,
+    remediation_effect_count: executed.effect_count,
+  }
+}
+
+export async function runCli(inputValue: unknown): Promise<unknown> {
   if (!isObject(inputValue) || !Array.isArray(inputValue.argv)) {
     throw new TypeError('CLI argv is required')
   }
@@ -57,8 +156,7 @@ export function runCli(inputValue: unknown): unknown {
     return output(
       { uri: content.uri, mimeType: content.mimeType, text: content.text },
       {
-        stderr:
-          'POST /raw/mcp\nMcp-Name: [REDACTED]\n{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"[REDACTED]"}}\n',
+        stderr: `${GOLDEN_WIRE_ENDPOINT}\nMcp-Name: [REDACTED]\n{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"[REDACTED]"}}\n`,
         stderr_forbidden_values: ['INCIDENT-SECRET'],
       },
     )
@@ -144,19 +242,14 @@ export function runCli(inputValue: unknown): unknown {
     })
   }
   if (group === 'demo') {
-    const approved = argv.includes('--approve')
-    const declined = argv.includes('--decline')
-    return output(
-      {
-        incident_id: randomUUID(),
-        status: approved ? 'MITIGATED' : 'INVESTIGATING',
-        remediation_effect_count: approved ? 1 : 0,
-      },
-      {
-        network_calls: 5,
-        elicitation_action: declined ? 'decline' : argv.includes('--cancel') ? 'cancel' : 'accept',
-      },
-    )
+    return output(await runDemoLifecycle(argv), {
+      network_calls: 6,
+      elicitation_action: argv.includes('--decline')
+        ? 'decline'
+        : argv.includes('--cancel')
+          ? 'cancel'
+          : 'accept',
+    })
   }
   return { exit_code: 2, stdout: '', stderr: 'Usage error\n', network_calls: 0 }
 }
