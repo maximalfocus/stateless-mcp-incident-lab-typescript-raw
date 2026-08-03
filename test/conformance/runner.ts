@@ -211,6 +211,17 @@ export function validateExpected(value: unknown, path = '$'): void {
   if (path === '$' && 'assertions' in value && !Array.isArray(value.assertions)) {
     throw new Error(`${path}.assertions: array required`)
   }
+  if (path === '$' && Array.isArray(value.assertions)) {
+    value.assertions.forEach((assertion, index) => {
+      if (
+        isRecord(assertion) &&
+        assertion.type === 'strict_http_shape' &&
+        (Object.keys(assertion).length !== 1 || Object.keys(assertion)[0] !== 'type')
+      ) {
+        throw new Error(`${path}.assertions[${String(index)}]: invalid strict_http_shape directive`)
+      }
+    })
+  }
   for (const [key, item] of Object.entries(value)) {
     if (!(directiveAssertions && key === 'assertions') && key !== ALLOW_EXTRA) {
       validateExpected(item, `${path}.${key}`)

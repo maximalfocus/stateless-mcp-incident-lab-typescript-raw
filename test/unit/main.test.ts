@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRawServer, startRawServer } from '../../src/adapters/inbound/index.js'
+import { MemoryIncidentStore } from '../../src/application/index.js'
 import { ResponseCache } from '../../src/client/cache.js'
 import { clearResponseCache, rpcCall, runNetworkCli } from '../../src/client/cli.js'
 import { implementation, main, run } from '../../src/main.js'
@@ -35,6 +36,17 @@ async function launch(options: Parameters<typeof createRawServer>[0] = {}): Prom
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   return `http://127.0.0.1:${String(port)}`
+}
+
+async function proposedIncidentStore(): Promise<MemoryIncidentStore> {
+  const store = new MemoryIncidentStore()
+  await store.create({
+    incidentId: 'i',
+    status: 'INVESTIGATING',
+    remediationId: 'r',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  })
+  return store
 }
 
 describe('raw entry point', () => {
@@ -318,6 +330,60 @@ describe('raw entry point', () => {
     expect(cancellations).toBe(1)
   })
 
+  it('fails closed on malformed progress tokens and consumes live SSE finals', async () => {
+    const store = new MemoryIncidentStore()
+    await store.create({
+      incidentId: 'streamed',
+      status: 'OPEN',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const base = await launch({ incidentStore: store, diagnosticIntervalMs: 0 })
+    const malformed = await fetch(`${base}/raw/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'tools/call',
+        'Mcp-Name': 'run_diagnostic',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'run_diagnostic',
+          arguments: { incident_id: 'streamed', service: 'api' },
+          _meta: {
+            progressToken: {},
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          },
+        },
+      }),
+    })
+    expect(malformed.status).toBe(400)
+    expect(await malformed.json()).toMatchObject({ error: { code: -32602 } })
+
+    const streamed = await rpcCall(base + '/raw/mcp', 'tools/call', {
+      name: 'run_diagnostic',
+      arguments: { incident_id: 'streamed', service: 'api' },
+      _meta: { progressToken: 'progress-1' },
+    })
+    expect(streamed.result).toMatchObject({
+      structuredContent: { findings: [{ code: 'DB_LATENCY' }] },
+    })
+  })
+
+  it('rejects execution for an unproposed remediation before claiming an effect', async () => {
+    const claim = vi.fn(() => Promise.resolve(true))
+    const base = await launch({ effectStore: { claim, ready: () => Promise.resolve(true) } })
+    const response = await rpcCall(base + '/raw/mcp', 'tools/call', {
+      name: 'execute_remediation',
+      arguments: { incident_id: 'missing', remediation_id: 'forged' },
+    })
+    expect(response.result).toMatchObject({ isError: true })
+    expect(claim).not.toHaveBeenCalled()
+  })
+
   it('enforces live request deadlines without applying a late effect', async () => {
     let effectApplied = false
     const effectStore = {
@@ -338,7 +404,12 @@ describe('raw entry point', () => {
           )
         }),
     }
-    const base = await launch({ deadlineMs: 10, effectStore, telemetry: () => undefined })
+    const base = await launch({
+      deadlineMs: 10,
+      effectStore,
+      incidentStore: await proposedIncidentStore(),
+      telemetry: () => undefined,
+    })
     const url = `${base}/raw/mcp`
     const args = { incident_id: 'i', remediation_id: 'r' }
     const initial = await rpcCall(url, 'tools/call', {
@@ -395,7 +466,7 @@ describe('raw entry point', () => {
   })
 
   it('applies one effect under concurrent accepted HTTP retries', async () => {
-    const base = await launch()
+    const base = await launch({ incidentStore: await proposedIncidentStore() })
     const url = `${base}/raw/mcp`
     const argumentsValue = { incident_id: 'i', remediation_id: 'r' }
     const initial = await rpcCall(url, 'tools/call', {

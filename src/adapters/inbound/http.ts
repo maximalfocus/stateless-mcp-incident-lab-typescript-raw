@@ -109,6 +109,22 @@ export async function handleHttp(
       },
     })
   }
+  const progressToken = meta?.progressToken
+  if (
+    progressToken !== undefined &&
+    typeof progressToken !== 'string' &&
+    typeof progressToken !== 'number'
+  ) {
+    return response(400, {
+      jsonrpc: '2.0',
+      id: body.id,
+      error: {
+        code: -32602,
+        message: 'Invalid params',
+        data: { field: 'params._meta.progressToken', reason: 'must be a string or number' },
+      },
+    })
+  }
   const headerVersion = headers.get('mcp-protocol-version')
   if (headerVersion === undefined) {
     return response(
@@ -239,10 +255,29 @@ export async function handleHttp(
       },
     })
   }
+  const mrtrParams = body.method === 'tools/call' && isObject(body.params) ? body.params : undefined
+  if (
+    mrtrParams?.name === 'execute_remediation' &&
+    incidentService !== undefined &&
+    isObject(mrtrParams.arguments) &&
+    typeof mrtrParams.arguments.incident_id === 'string' &&
+    typeof mrtrParams.arguments.remediation_id === 'string'
+  ) {
+    const invalidRemediation = await incidentService.validateRemediation(
+      mrtrParams.arguments.incident_id,
+      mrtrParams.arguments.remediation_id,
+      signal,
+    )
+    if (invalidRemediation !== undefined) {
+      return response(200, {
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { ...invalidRemediation, _meta: catalogMeta() },
+      })
+    }
+  }
   const mrtr =
-    body.method === 'tools/call'
-      ? await handleMrtr(body.params, input, effectStore, signal)
-      : undefined
+    mrtrParams === undefined ? undefined : await handleMrtr(mrtrParams, input, effectStore, signal)
   if (mrtr !== undefined) {
     if (incidentService !== undefined && 'result' in mrtr) {
       const params = isObject(body.params) ? body.params : {}

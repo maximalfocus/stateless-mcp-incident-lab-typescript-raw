@@ -52,6 +52,9 @@ describe('strict golden matching', () => {
     expect(() => {
       validateExpected({ assertions: null })
     }).toThrow('array required')
+    expect(() => {
+      validateExpected({ assertions: [{ type: 'strict_http_shape', ignored: true }] })
+    }).toThrow('invalid strict_http_shape directive')
   })
 
   it('distinguishes directives from observable architecture assertions', () => {

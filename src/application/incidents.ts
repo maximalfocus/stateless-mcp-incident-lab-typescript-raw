@@ -190,6 +190,24 @@ export class IncidentService {
     }
   }
 
+  async validateRemediation(
+    incidentId: string,
+    remediationId: string,
+    signal?: AbortSignal,
+  ): Promise<ObjectValue | undefined> {
+    const record = await this.#store.get(incidentId, signal)
+    if (record === undefined || Date.parse(record.expiresAt) <= this.#now()) {
+      return domainError('Unknown or expired incident; create another incident.')
+    }
+    if (
+      record.remediationId !== remediationId ||
+      (record.status !== 'INVESTIGATING' && record.status !== 'MITIGATED')
+    ) {
+      return domainError('The remediation is not proposed for this incident.')
+    }
+    return undefined
+  }
+
   async markMitigated(
     incidentId: string,
     remediationId: string,

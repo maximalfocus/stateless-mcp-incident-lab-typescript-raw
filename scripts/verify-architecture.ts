@@ -129,12 +129,53 @@ function deepImportViolation(assertion: NoDeepImport, from: string, imported: st
   return imported.startsWith(`${moduleRoot}/`)
 }
 
+function validateAssertion(value: unknown, index: number): asserts value is Assertion {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`architecture assertion ${String(index)} must be an object`)
+  }
+  const assertion = value as Record<string, unknown>
+  const common = typeof assertion.from_glob === 'string' && assertion.from_glob.length > 0
+  if (assertion.type === 'no_import') {
+    const keys = Object.keys(assertion).sort().join(',')
+    if (
+      !common ||
+      typeof assertion.import_pattern !== 'string' ||
+      keys !== 'from_glob,import_pattern,type'
+    ) {
+      throw new Error(`architecture assertion ${String(index)} has invalid no_import shape`)
+    }
+    try {
+      new RegExp(assertion.import_pattern)
+    } catch {
+      throw new Error(`architecture assertion ${String(index)} has invalid import_pattern`)
+    }
+    return
+  }
+  if (assertion.type === 'no_deep_import') {
+    const keys = Object.keys(assertion).sort().join(',')
+    if (
+      !common ||
+      typeof assertion.module_pattern !== 'string' ||
+      typeof assertion.allowed_entry !== 'string' ||
+      !['allow', 'deny'].includes(String(assertion.same_module)) ||
+      keys !== 'allowed_entry,from_glob,module_pattern,same_module,type'
+    ) {
+      throw new Error(`architecture assertion ${String(index)} has invalid no_deep_import shape`)
+    }
+    return
+  }
+  throw new Error(`architecture assertion ${String(index)} has unsupported type`)
+}
+
 export async function verifyArchitecture(
   expected: Expected,
   root = process.cwd(),
 ): Promise<Expected> {
   const assertions = expected.assertions ?? []
   if (assertions.length === 0) throw new Error('architecture contract has no assertions')
+  assertions.forEach((assertion, index) => {
+    validateAssertion(assertion, index)
+  })
   const files = await sourceFiles(root)
   const violations: string[] = []
   for (const assertion of assertions) {
@@ -205,8 +246,22 @@ async function selfTest(): Promise<void> {
       }
       if (!rejected) throw new Error(`self-test: module edge was accepted: ${form}`)
     }
+    const malformedAssertions: unknown[] = [
+      { type: 'unknown', from_glob: 'src/**' },
+      { type: 'no_import', from_glob: 'src/**', import_pattern: '^x', ignored: true },
+      { type: 'no_deep_import', from_glob: 'src/**', module_pattern: 'src/x/*/' },
+    ]
+    for (const assertion of malformedAssertions) {
+      let rejected = false
+      try {
+        await verifyArchitecture({ assertions: [assertion] } as Expected, root)
+      } catch {
+        rejected = true
+      }
+      if (!rejected) throw new Error('self-test: malformed architecture assertion was accepted')
+    }
     console.log(
-      `PASS architecture verifier rejected ${String(forbiddenForms.length)} module-edge forms`,
+      `PASS architecture verifier rejected ${String(forbiddenForms.length)} module-edge forms and ${String(malformedAssertions.length)} malformed assertion shapes`,
     )
   } finally {
     await rm(root, { recursive: true, force: true })

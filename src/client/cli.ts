@@ -29,6 +29,37 @@ function object(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function finalSseResponse(
+  payload: string,
+  requestId: string | number,
+): JsonRpcResponse | undefined {
+  for (const block of payload.split(/\r?\n\r?\n/).reverse()) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+    if (data.length === 0) continue
+    try {
+      const parsed = JSON.parse(data) as unknown
+      if (
+        object(parsed).jsonrpc === '2.0' &&
+        Object.is(object(parsed).id, requestId) &&
+        ('result' in object(parsed) || 'error' in object(parsed))
+      ) {
+        return parsed as JsonRpcResponse
+      }
+    } catch {
+      // An incomplete final event is a broken stream and is retried below.
+    }
+  }
+  return undefined
+}
+
+function reissuedId(id: string | number): string | number {
+  return typeof id === 'number' ? id + 1 : `${id}-retry`
+}
+
 export async function rpcCall(
   url: string,
   method: string,
@@ -72,13 +103,33 @@ export async function rpcCall(
     )
   }
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-    })
-    const body = (await response.json()) as JsonRpcResponse
-    if (!response.ok && body.error === undefined) throw new Error(`HTTP ${String(response.status)}`)
+    const perform = async (
+      requestId: string | number,
+      reissuesRemaining: number,
+    ): Promise<JsonRpcResponse> => {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
+      })
+      const contentType = response.headers.get('content-type') ?? ''
+      let body: JsonRpcResponse
+      if (contentType.toLowerCase().startsWith('text/event-stream')) {
+        const final = finalSseResponse(await response.text(), requestId)
+        if (final === undefined) {
+          if (reissuesRemaining === 0) throw new Error('SSE stream ended before a final response')
+          return await perform(reissuedId(requestId), reissuesRemaining - 1)
+        }
+        body = final
+      } else {
+        body = (await response.json()) as JsonRpcResponse
+      }
+      if (!response.ok && body.error === undefined) {
+        throw new Error(`HTTP ${String(response.status)}`)
+      }
+      return body
+    }
+    const body = await perform(id, 1)
     const hints = cacheHints(body.result)
     if (options.noCache !== true && hints !== undefined) responseCache.set(key, body, hints.ttlMs)
     return body
