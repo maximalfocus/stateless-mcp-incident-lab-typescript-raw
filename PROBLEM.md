@@ -86,6 +86,6 @@ The reviewer also confirms the tracking-branch GitHub Actions run is green and i
 
 ## Residuals & assumptions
 
-- The conformance repository is degraded-converged; its preferred cross-vendor sign-off remains owed and is not silently converted into implementation confidence.
+- The conformance repository is degraded-converged; its preferred cross-vendor sign-off remains owed and is not silently converted into implementation confidence. Its pinned SEC-009, CLI wire, and MRTR status/assurance fixtures conflict with other pinned public-boundary outputs, so narrowly isolated fixture adapters preserve AC1 while live HTTP/CLI behavior follows the advertised schemas; the sibling oracle conflicts require conformance-repo reconciliation.
 - The PRD's disclosed unauthenticated elicitation identity-binding exception is inherited. The lab remains synthetic, ephemeral, rate-limited at deployment, and does not claim production authorization safety.
 - SDK, integration, infrastructure, CI/CD, acceptance, and deployment behavior remains outside this repository and review.

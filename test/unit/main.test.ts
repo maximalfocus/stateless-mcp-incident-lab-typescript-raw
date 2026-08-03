@@ -530,6 +530,29 @@ describe('raw entry point', () => {
     expect(JSON.stringify(records)).not.toContain('secret')
   })
 
+  it('keeps live decline and cancel statuses inside the advertised output schema', async () => {
+    const base = await launch({ incidentStore: await proposedIncidentStore() })
+    const url = `${base}/raw/mcp`
+    const argumentsValue = { incident_id: 'i', remediation_id: 'r' }
+    const initial = await rpcCall(url, 'tools/call', {
+      name: 'execute_remediation',
+      arguments: argumentsValue,
+    })
+    const requestState = (initial.result as { requestState: string }).requestState
+    for (const [action, status] of [
+      ['decline', 'DECLINED'],
+      ['cancel', 'CANCELLED'],
+    ] as const) {
+      const result = await rpcCall(url, 'tools/call', {
+        name: 'execute_remediation',
+        arguments: argumentsValue,
+        requestState,
+        inputResponses: { approval: { action } },
+      })
+      expect(result.result).toMatchObject({ structuredContent: { status, effect_count: 0 } })
+    }
+  })
+
   it('applies one effect under concurrent accepted HTTP retries', async () => {
     const base = await launch({ incidentStore: await proposedIncidentStore() })
     const url = `${base}/raw/mcp`
