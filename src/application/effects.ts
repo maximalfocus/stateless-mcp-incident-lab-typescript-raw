@@ -1,5 +1,10 @@
 export interface EffectStore {
   claim(remediationId: string, signal?: AbortSignal): Promise<boolean>
+  claimAndMitigate?(
+    incidentId: string,
+    remediationId: string,
+    signal?: AbortSignal,
+  ): Promise<boolean>
   ready(): Promise<boolean>
 }
 

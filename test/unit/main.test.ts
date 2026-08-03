@@ -330,6 +330,58 @@ describe('raw entry point', () => {
     expect(cancellations).toBe(1)
   })
 
+  it('closes an SSE stream when its post-header deadline expires', async () => {
+    let cancellations = 0
+    const base = await launch({
+      deadlineMs: 10,
+      diagnosticIntervalMs: 100,
+      diagnosticCancelled: () => {
+        cancellations += 1
+      },
+      telemetry: () => undefined,
+    })
+    const response = await fetch(`${base}/raw/mcp`, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'tools/call',
+        'Mcp-Name': 'run_diagnostic',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'run_diagnostic',
+          arguments: { incident_id: 'i', service: 'api' },
+          _meta: {
+            progressToken: 'p',
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          },
+        },
+      }),
+    })
+    if (response.body === null) throw new Error('expected an SSE response body')
+    const reader = response.body.getReader()
+    await reader.read()
+    const outcome = await Promise.race([
+      reader.read().then(
+        () => 'closed',
+        () => 'closed',
+      ),
+      new Promise<string>((resolve) =>
+        setTimeout(() => {
+          resolve('timeout')
+        }, 250),
+      ),
+    ])
+    expect(outcome).toBe('closed')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(cancellations).toBe(1)
+  })
+
   it('fails closed on malformed progress tokens and consumes live SSE finals', async () => {
     const store = new MemoryIncidentStore()
     await store.create({
@@ -501,6 +553,46 @@ describe('raw entry point', () => {
     expect(effects.reduce((sum, value) => sum + value, 0)).toBe(1)
   })
 
+  it('reissues a broken SSE request with a new JSON-RPC id', async () => {
+    const requestIds: unknown[] = []
+    let attempt = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      requestIds.push(request.id)
+      attempt += 1
+      if (attempt === 1) {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'event: message\ndata: {"method":"notifications/progress"}\n\n',
+              ),
+            )
+            controller.error(new Error('broken stream'))
+          },
+        })
+        return Promise.resolve(
+          new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }),
+        )
+      }
+      return Promise.resolve(
+        new Response(
+          `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { resultType: 'complete' } })}\n\n`,
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+      )
+    })
+    await expect(
+      rpcCall('https://example.test/raw/mcp', 'tools/call', {
+        name: 'run_diagnostic',
+        arguments: { incident_id: 'i', service: 'api' },
+        _meta: { progressToken: 'p' },
+      }),
+    ).resolves.toMatchObject({ result: { resultType: 'complete' } })
+    expect(requestIds).toEqual([1, 2])
+  })
+
   it('walks opaque list cursors, including the empty string, to a complete CLI snapshot', async () => {
     clearResponseCache()
     const requests: Array<Record<string, unknown>> = []
@@ -540,6 +632,47 @@ describe('raw entry point', () => {
       ttlMs: 50,
       cacheScope: 'public',
     })
+  })
+
+  it('rejects malformed, cyclic, and cache-scope-inconsistent list pages', async () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    let mode: 'malformed' | 'cursor' | 'scope' = 'malformed'
+    let page = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      page += 1
+      const result =
+        mode === 'malformed'
+          ? { resultType: 'complete', ttlMs: 10, cacheScope: 'public' }
+          : mode === 'cursor'
+            ? {
+                resultType: 'complete',
+                tools: [],
+                nextCursor: 7,
+                ttlMs: 10,
+                cacheScope: 'public',
+              }
+            : {
+                resultType: 'complete',
+                tools: [],
+                ...(page === 1 ? { nextCursor: 'next' } : {}),
+                ttlMs: 10,
+                cacheScope: page === 1 ? 'public' : 'private',
+              }
+      return Promise.resolve(
+        new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+    expect(await runNetworkCli(['tools', 'list', 'https://malformed.test/raw/mcp'])).toBe(5)
+    mode = 'cursor'
+    page = 0
+    expect(await runNetworkCli(['tools', 'list', 'https://cursor.test/raw/mcp'])).toBe(5)
+    mode = 'scope'
+    page = 0
+    expect(await runNetworkCli(['tools', 'list', 'https://scope.test/raw/mcp'])).toBe(5)
   })
 
   it('runs every advertised CLI family through HTTP', async () => {

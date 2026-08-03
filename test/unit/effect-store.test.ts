@@ -20,6 +20,20 @@ describe('DynamoDB effect store', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it('atomically claims an effect and mitigates its incident', async () => {
+    const send = vi
+      .fn<(command: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce({ name: 'TransactionCanceledException' })
+      .mockRejectedValueOnce(new Error('transaction unavailable'))
+    const store = new DynamoEffectStore('effects', undefined, { send })
+    await expect(store.claimAndMitigate('i', 'r')).resolves.toBe(true)
+    await expect(store.claimAndMitigate('i', 'r')).resolves.toBe(false)
+    await expect(store.claimAndMitigate('i', 'r')).rejects.toThrow('transaction unavailable')
+    const input = (send.mock.calls[0]?.[0] as { input?: { TransactItems?: unknown[] } }).input
+    expect(input?.TransactItems).toHaveLength(2)
+  })
+
   it('persists incident records in the same DynamoDB table', async () => {
     const send = vi
       .fn<(command: unknown) => Promise<unknown>>()

@@ -95,11 +95,15 @@ async function sendSse(
   })
   const events = value.events ?? []
   const cancelled = (): boolean => signal.aborted || response.destroyed
+  const stopCancelledStream = (): false => {
+    if (!response.destroyed) response.destroy()
+    return false
+  }
   for (const [index, eventValue] of events.entries()) {
-    if (cancelled()) return false
+    if (cancelled()) return stopCancelledStream()
     if (index > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, intervalMs))
-      if (cancelled()) return false
+      if (cancelled()) return stopCancelledStream()
     }
     const event =
       typeof eventValue === 'object' && eventValue !== null && !Array.isArray(eventValue)
@@ -334,13 +338,16 @@ export function createRawServer(options: ServerOptions = {}): Server {
         const deadlineTimer = setTimeout(() => {
           controller.abort(new Error('Request deadline exceeded'))
         }, deadlineMs)
-        completed = await sendSse(
-          response,
-          await handleSse(requestValue, null, { final_result: validationBody.result }),
-          controller.signal,
-          diagnosticIntervalMs,
-        )
-        clearTimeout(deadlineTimer)
+        try {
+          completed = await sendSse(
+            response,
+            await handleSse(requestValue, null, { final_result: validationBody.result }),
+            controller.signal,
+            diagnosticIntervalMs,
+          )
+        } finally {
+          clearTimeout(deadlineTimer)
+        }
         if (!completed) options.diagnosticCancelled?.()
         else {
           const record = telemetryRecord(body, validation, startedAt)

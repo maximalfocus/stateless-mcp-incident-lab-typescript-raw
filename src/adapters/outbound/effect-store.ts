@@ -3,6 +3,7 @@ import {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  TransactWriteItemsCommand,
 } from '@aws-sdk/client-dynamodb'
 import type { EffectStore } from '../../application/effects.js'
 import type { IncidentRecord, IncidentStore } from '../../application/incidents.js'
@@ -50,6 +51,59 @@ export class DynamoEffectStore implements EffectStore, IncidentStore {
         error !== null &&
         'name' in error &&
         error.name === 'ConditionalCheckFailedException'
+      ) {
+        return false
+      }
+      throw error
+    }
+  }
+
+  async claimAndMitigate(
+    incidentId: string,
+    remediationId: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      await this.#client.send(
+        new TransactWriteItemsCommand({
+          TransactItems: [
+            {
+              Update: {
+                TableName: this.#tableName,
+                Key: { PK: { S: `INCIDENT#${incidentId}` }, SK: { S: 'STATE' } },
+                UpdateExpression: 'SET #status = :mitigated',
+                ConditionExpression: '#status = :investigating AND remediation_id = :remediationId',
+                ExpressionAttributeNames: { '#status': 'status' },
+                ExpressionAttributeValues: {
+                  ':investigating': { S: 'INVESTIGATING' },
+                  ':mitigated': { S: 'MITIGATED' },
+                  ':remediationId': { S: remediationId },
+                },
+              },
+            },
+            {
+              Put: {
+                TableName: this.#tableName,
+                Item: {
+                  PK: { S: `REMEDIATION#${remediationId}` },
+                  SK: { S: 'EFFECT' },
+                  status: { S: 'EXECUTED' },
+                  executed_at: { S: new Date().toISOString() },
+                },
+                ConditionExpression: 'attribute_not_exists(PK)',
+              },
+            },
+          ],
+        }),
+        signal === undefined ? undefined : { abortSignal: signal },
+      )
+      return true
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'name' in error &&
+        error.name === 'TransactionCanceledException'
       ) {
         return false
       }

@@ -116,7 +116,14 @@ export async function rpcCall(
       const contentType = response.headers.get('content-type') ?? ''
       let body: JsonRpcResponse
       if (contentType.toLowerCase().startsWith('text/event-stream')) {
-        const final = finalSseResponse(await response.text(), requestId)
+        let payload: string
+        try {
+          payload = await response.text()
+        } catch (error) {
+          if (reissuesRemaining === 0) throw error
+          return await perform(reissuedId(requestId), reissuesRemaining - 1)
+        }
+        const final = finalSseResponse(payload, requestId)
         if (final === undefined) {
           if (reissuesRemaining === 0) throw new Error('SSE stream ended before a final response')
           return await perform(reissuedId(requestId), reissuesRemaining - 1)
@@ -183,7 +190,7 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     if (field === undefined) throw new TypeError(`Unsupported list method ${method}`)
     const silentOptions = { ...options }
     delete silentOptions.warning
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; ; attempt += 1) {
       const items: unknown[] = []
       const seenCursors = new Set<string>()
       let cursor: string | undefined
@@ -235,7 +242,6 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
         },
       }
     }
-    throw new Error(`Unable to refresh the complete ${method} snapshot`)
   }
   const filtered = argv.filter((value) => value !== '--wire' && value !== '--no-cache')
   const [group, action, url, name, rawArguments] = filtered

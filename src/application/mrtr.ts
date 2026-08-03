@@ -148,8 +148,13 @@ export async function handleMrtr(
         ),
       }
     }
+    const incidentId = String(argumentsValue.incident_id)
     const effectApplied =
-      effectStore === undefined ? true : await effectStore.claim(remediationId, signal)
+      effectStore === undefined
+        ? true
+        : effectStore.claimAndMitigate === undefined
+          ? await effectStore.claim(remediationId, signal)
+          : await effectStore.claimAndMitigate(incidentId, remediationId, signal)
     let structuredContent: Record<string, unknown>
     if (typeof input.requestState_bytes === 'string') {
       structuredContent = {

@@ -287,6 +287,7 @@ export async function handleHttp(
         : {}
       if (
         structured.status === 'EXECUTED' &&
+        effectStore?.claimAndMitigate === undefined &&
         typeof args.incident_id === 'string' &&
         typeof args.remediation_id === 'string'
       ) {

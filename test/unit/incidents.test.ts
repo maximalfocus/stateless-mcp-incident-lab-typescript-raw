@@ -197,9 +197,19 @@ describe('runtime incident service', () => {
   })
 
   it('rejects operations without handles or unsupported names', async () => {
-    const service = new IncidentService(new MemoryIncidentStore(), () => 0)
+    const store = new MemoryIncidentStore()
+    const service = new IncidentService(store, () => 0)
     await expect(service.call('get_incident', {})).resolves.toBeUndefined()
     await expect(service.call('unknown', { incident_id: 'i' })).resolves.toBeUndefined()
     await expect(service.markMitigated('missing', 'r')).resolves.toBe(false)
+    await store.create({
+      incidentId: 'i',
+      status: 'INVESTIGATING',
+      remediationId: 'proposed',
+      expiresAt: '2026-08-02T01:00:00Z',
+    })
+    await expect(service.validateRemediation('i', 'forged')).resolves.toMatchObject({
+      isError: true,
+    })
   })
 })
