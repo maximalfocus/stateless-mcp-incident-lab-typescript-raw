@@ -6,7 +6,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function catalogMeta(replica = 'raw-local-1'): Record<string, unknown> {
+export function catalogMeta(
+  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+): Record<string, unknown> {
   return {
     'io.modelcontextprotocol/serverInfo': SERVER_INFO,
     'io.maximalfocus.stateless-incident-lab/replica': replica,

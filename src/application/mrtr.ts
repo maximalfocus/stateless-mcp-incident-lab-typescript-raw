@@ -11,7 +11,7 @@ const META = {
     name: 'stateless-mcp-incident-lab',
     version: '2026-07-28',
   },
-  'io.maximalfocus.stateless-incident-lab/replica': 'raw-local-1',
+  'io.maximalfocus.stateless-incident-lab/replica': process.env.REPLICA_ID ?? 'raw-local-1',
 }
 
 const APPROVAL_REQUEST = {

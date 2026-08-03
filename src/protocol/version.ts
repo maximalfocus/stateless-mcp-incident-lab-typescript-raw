@@ -4,14 +4,18 @@ import { isObject } from './schema.js'
 export const PROTOCOL_VERSION = '2026-07-28'
 const SERVER_INFO = { name: 'stateless-mcp-incident-lab', version: PROTOCOL_VERSION } as const
 
-export function serverMeta(replica = 'raw-local-1'): Record<string, unknown> {
+export function serverMeta(
+  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+): Record<string, unknown> {
   return {
     'io.modelcontextprotocol/serverInfo': SERVER_INFO,
     'io.maximalfocus.stateless-incident-lab/replica': replica,
   }
 }
 
-export function discoveryResult(replica = 'raw-local-1'): Record<string, unknown> {
+export function discoveryResult(
+  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+): Record<string, unknown> {
   return {
     resultType: 'complete',
     supportedVersions: [PROTOCOL_VERSION],
