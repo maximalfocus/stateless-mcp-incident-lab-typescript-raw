@@ -41,35 +41,6 @@ function unsupportedVersion(id: unknown, requested: string): Record<string, unkn
   }
 }
 
-function remediationInputRequired(id: unknown): Record<string, unknown> {
-  return {
-    jsonrpc: '2.0',
-    id,
-    result: {
-      resultType: 'input_required',
-      requestState: 'raw.signed.request-state',
-      _meta: serverMeta(),
-      inputRequests: {
-        approval: {
-          method: 'elicitation/create',
-          params: {
-            mode: 'form',
-            message: 'Approve simulated remediation?',
-            requestedSchema: {
-              type: 'object',
-              properties: {
-                decision: { type: 'string', enum: ['accept', 'decline'] },
-                confirmation: { type: 'boolean' },
-              },
-              required: ['decision', 'confirmation'],
-            },
-          },
-        },
-      },
-    },
-  }
-}
-
 export function handleHttp(
   requestValue: unknown,
   seedValue: unknown,
@@ -87,51 +58,6 @@ export function handleHttp(
   if (input.operation === 'discover_with_version_recovery') {
     const offered = Array.isArray(input.offered_versions) ? input.offered_versions : []
     return jsonResponse(200, discoverWithVersionRecovery(offered))
-  }
-  if (input.compare === 'normalized_response' && Array.isArray(input.requests)) {
-    const response = { jsonrpc: '2.0', id, result: discoveryResult() }
-    return jsonResponse(200, { equivalent: true, responses: [response, response] })
-  }
-  if (Array.isArray(input.requests)) {
-    if (input.requests.every((item) => isObject(item) && 'protocol_version' in item)) {
-      return jsonResponse(200, {
-        responses: input.requests.map((item, index) => {
-          const version =
-            isObject(item) && typeof item.protocol_version === 'string' ? item.protocol_version : ''
-          return version === PROTOCOL_VERSION
-            ? { jsonrpc: '2.0', id: index + 1, result: discoveryResult() }
-            : unsupportedVersion(index + 1, version)
-        }),
-      })
-    }
-    if (input.requests.every((item) => isObject(item) && 'client_capabilities' in item)) {
-      return jsonResponse(200, {
-        responses: input.requests.map((item, index) => {
-          const capabilities =
-            isObject(item) && isObject(item.client_capabilities) ? item.client_capabilities : {}
-          const elicitation = isObject(capabilities.elicitation)
-            ? capabilities.elicitation
-            : undefined
-          if (elicitation !== undefined && isObject(elicitation.form))
-            return remediationInputRequired(index + 1)
-          return {
-            jsonrpc: '2.0',
-            id: index + 1,
-            error: {
-              code: -32021,
-              message: 'Missing required client capability',
-              data: {
-                requiredCapabilities: {
-                  inputRequests: {
-                    approval: { method: 'elicitation/create', params: { form: {} } },
-                  },
-                },
-              },
-            },
-          }
-        }),
-      })
-    }
   }
   if (meta === undefined) {
     return jsonResponse(400, {
