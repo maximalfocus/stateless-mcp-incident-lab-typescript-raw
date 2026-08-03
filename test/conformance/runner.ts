@@ -13,6 +13,7 @@ import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
 import { executeFunction as catalogFunction } from '../../src/application/catalogs.js'
 import { runStateMachine } from '../../src/application/incidents.js'
 import { executeFunction as cacheFunction } from '../../src/client/cache.js'
+import { echoRequestState } from '../../src/client/cli.js'
 import { executeFunction as transportFunction } from '../../src/client/http.js'
 import { executeFunction as dependencyFunction } from '../../src/dependencies/index.js'
 import { checkProperty } from '../../src/properties.js'
@@ -467,6 +468,11 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
       cache: cacheFunction,
       security: securityFunction,
       dependencies: dependencyFunction,
+      mrtr: (input: unknown) => {
+        if (!isRecord(input) || input.operation !== 'echo_request_state')
+          throw new TypeError('MRTR function operation is required')
+        return echoRequestState(input.request_state)
+      },
     }
     const candidate = functions[fixture.category]
     if (candidate === undefined) throw new Error(`No function adapter for ${fixture.category}`)

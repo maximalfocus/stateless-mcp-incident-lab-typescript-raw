@@ -28,6 +28,11 @@ function metadata(): Record<string, unknown> {
   }
 }
 
+export function echoRequestState(value: unknown): { request_state: string } {
+  if (typeof value !== 'string') throw new TypeError('MRTR requestState must be a string')
+  return { request_state: value }
+}
+
 function object(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -308,7 +313,7 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
         name: 'execute_remediation',
         arguments: { incident_id: incidentId, remediation_id: remediationId },
       })
-      const requestState = object(initial.result).requestState
+      const requestState = echoRequestState(object(initial.result).requestState).request_state
       response = await call(action, 'tools/call', {
         name: 'execute_remediation',
         arguments: { incident_id: incidentId, remediation_id: remediationId },
