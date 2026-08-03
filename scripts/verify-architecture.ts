@@ -64,15 +64,35 @@ function importsOf(path: string, text: string): ModuleEdge[] {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const imports: ModuleEdge[] = []
   const requireAliases = new Set<string>()
+  const createRequireNames = new Set(['createRequire'])
+  const moduleNamespaces = new Set<string>()
   const isCreateRequireCall = (node: ts.Node): node is ts.CallExpression =>
     ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === 'createRequire'
+    ((ts.isIdentifier(node.expression) && createRequireNames.has(node.expression.text)) ||
+      (ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        moduleNamespaces.has(node.expression.expression.text) &&
+        node.expression.name.text === 'createRequire'))
   function add(kind: string, node: ts.Node | undefined): void {
     const specifier = stringLiteral(node)
     imports.push(specifier === undefined ? { kind } : { kind, specifier })
   }
   function visit(node: ts.Node): void {
+    if (
+      ts.isImportDeclaration(node) &&
+      stringLiteral(node.moduleSpecifier) === 'node:module' &&
+      node.importClause?.namedBindings !== undefined
+    ) {
+      const bindings = node.importClause.namedBindings
+      if (ts.isNamespaceImport(bindings)) moduleNamespaces.add(bindings.name.text)
+      else {
+        for (const element of bindings.elements) {
+          if ((element.propertyName?.text ?? element.name.text) === 'createRequire') {
+            createRequireNames.add(element.name.text)
+          }
+        }
+      }
+    }
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -103,6 +123,11 @@ function importsOf(path: string, text: string): ModuleEdge[] {
           (node.expression.expression.text === 'require' ||
             requireAliases.has(node.expression.expression.text)) &&
           node.expression.name.text === 'resolve') ||
+        (ts.isElementAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          (node.expression.expression.text === 'require' ||
+            requireAliases.has(node.expression.expression.text)) &&
+          stringLiteral(node.expression.argumentExpression) === 'resolve') ||
         isCreateRequireCall(node.expression)
       const isImportMetaResolve =
         ts.isPropertyAccessExpression(node.expression) &&
@@ -274,6 +299,9 @@ async function selfTest(): Promise<void> {
       "const target = '../domain/incidents/internal.js'; require(target)\n",
       "const path = require.resolve('../domain/incidents/internal.js')\n",
       "import { createRequire } from 'node:module'; const req = createRequire(import.meta.url); req('../domain/incidents/internal.js')\n",
+      "import { createRequire } from 'node:module'; const req = createRequire(import.meta.url); req['resolve']('../domain/incidents/internal.js')\n",
+      "import { createRequire as makeRequire } from 'node:module'; const req = makeRequire(import.meta.url); req('../domain/incidents/internal.js')\n",
+      "import * as moduleApi from 'node:module'; moduleApi.createRequire(import.meta.url)('../domain/incidents/internal.js')\n",
       "import { createRequire } from 'node:module'; createRequire(import.meta.url)('../domain/incidents/internal.js')\n",
       "const path = import.meta.resolve('../domain/incidents/internal.js')\n",
     ]

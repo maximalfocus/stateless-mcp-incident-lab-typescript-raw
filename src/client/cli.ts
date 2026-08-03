@@ -328,7 +328,12 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
       if (response.error === undefined) {
         const toolsValue = object(response.result).tools
         const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
-        write(tools.find((tool) => object(tool).name === name) ?? null)
+        const tool = tools.find((value) => object(value).name === name)
+        if (tool === undefined) {
+          process.stderr.write('Unknown tool\n')
+          return 3
+        }
+        write(tool)
         return 0
       }
     } else if (group === 'tools' && action === 'call' && name !== undefined) {

@@ -40,7 +40,9 @@ incident-mcp prompts list|get <url> [...]
 incident-mcp demo <url> --approve|--decline|--cancel
 ```
 
-Global diagnostic options include `--wire` with sensitive-value redaction and `--no-cache`.
+Tool and prompt arguments are supplied as one JSON object, either positionally or after a `--json`
+marker. Global diagnostic options include `--wire` with sensitive-value redaction and `--no-cache`.
+`tools inspect` exits 3 when the named tool is absent from the catalog.
 
 ## Docker
 

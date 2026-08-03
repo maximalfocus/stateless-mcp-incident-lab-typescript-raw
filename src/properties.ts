@@ -1,9 +1,43 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { catalogMeta, primitiveResult } from './application/catalogs.js'
 import { deriveCacheKey } from './client/cache-key.js'
+import { transition, type IncidentState } from './domain/incident.js'
 import { decodeHeaderValue, encodeHeaderValue } from './protocol/headers.js'
+import { discoveryResult } from './protocol/version.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const REPLICA_META_KEY = 'io.maximalfocus.stateless-incident-lab/replica'
+
+const REPLICA_RESULTS: Readonly<Record<string, (replica: string) => Record<string, unknown>>> = {
+  'server/discover': (replica) => discoveryResult(replica),
+}
+
+function replicaResult(
+  method: string,
+  params: unknown,
+  replica: string,
+): Record<string, unknown> | undefined {
+  const build = REPLICA_RESULTS[method]
+  if (build !== undefined) return build(replica)
+  const result = primitiveResult(method, params)
+  return result === undefined ? undefined : { ...result, _meta: catalogMeta(replica) }
+}
+
+// Produces the real response the named replica would return, split into the replica identity and
+// the payload that the stateless law requires to be identical on every replica.
+function replicaObservation(
+  method: string,
+  params: unknown,
+  replica: string,
+): { marker: unknown; payload: string } | undefined {
+  const result = replicaResult(method, params, replica)
+  if (result === undefined) return undefined
+  const meta = isObject(result._meta) ? result._meta : {}
+  const { [REPLICA_META_KEY]: marker, ...normalizedMeta } = meta
+  return { marker, payload: JSON.stringify({ ...result, _meta: normalizedMeta }) }
 }
 
 function hmac(secret: Buffer, payload: Buffer): Buffer {
@@ -69,19 +103,30 @@ export function checkProperty(property: Record<string, unknown>): unknown {
     holds = examples.every((value) => {
       if (!isObject(value) || !isObject(value.request) || !Array.isArray(value.replicas))
         return false
+      const replicas = value.replicas.filter((item): item is string => typeof item === 'string')
       const method = value.request.method
-      return typeof method === 'string' && value.replicas.length >= 2
+      const params = value.request.params
+      if (typeof method !== 'string' || replicas.length < 2) return false
+      const observations = replicas.map((replica) => replicaObservation(method, params, replica))
+      const first = observations[0]
+      if (first === undefined) return false
+      return observations.every(
+        (observation, index) =>
+          observation !== undefined &&
+          observation.payload === first.payload &&
+          observation.marker === replicas[index],
+      )
     })
   } else if (target === 'execute_concurrent_retries') {
     holds = examples.every((value) => {
       if (typeof value !== 'number' || value < 1) return false
-      let executed = false
+      let state: IncidentState = 'INVESTIGATING'
       let effects = 0
       for (let index = 0; index < value; index += 1) {
-        if (!executed) {
-          executed = true
-          effects += 1
-        }
+        const next = transition(state, 'execute_remediation')
+        if (next === undefined) continue
+        state = next
+        effects += 1
       }
       return effects >= Number(property.min) && effects <= Number(property.max)
     })

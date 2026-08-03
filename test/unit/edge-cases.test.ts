@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { runCli } from '../../src/adapters/inbound/cli.js'
 import { healthResponse } from '../../src/adapters/inbound/health.js'
 import { handleSse } from '../../src/adapters/inbound/sse.js'
 import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
-import { executeFunction as catalogFunction } from '../../src/application/catalogs.js'
+import {
+  executeFunction as catalogFunction,
+  primitiveResult,
+} from '../../src/application/catalogs.js'
 import {
   IncidentService,
   MemoryEffectStore,
@@ -247,6 +251,64 @@ describe('reachable defensive paths', () => {
     expect(
       checkProperty({ target: 'execute_concurrent_retries', examples: [1], min: 2, max: 1 }),
     ).toEqual({ holds: false })
+  })
+
+  it('derives replica independence and at-most-once effects from real responses', () => {
+    for (const method of ['server/discover', 'tools/list']) {
+      expect(
+        checkProperty({
+          target: 'execute_on_replica',
+          examples: [{ request: { method }, replicas: ['raw-local-1', 'raw-local-2'] }],
+        }),
+      ).toEqual({ holds: true })
+    }
+    expect(
+      checkProperty({
+        target: 'execute_on_replica',
+        examples: [{ request: { method: 'unknown/method' }, replicas: ['a', 'b'] }],
+      }),
+    ).toEqual({ holds: false })
+    expect(
+      checkProperty({
+        target: 'execute_on_replica',
+        examples: [{ request: { method: 'tools/list' }, replicas: ['a', 1, 'b'] }],
+      }),
+    ).toEqual({ holds: true })
+
+    for (const retries of [1, 2, 20, 100]) {
+      const law: Record<string, unknown> = {
+        target: 'execute_concurrent_retries',
+        examples: [retries],
+        min: 1,
+        max: 1,
+      }
+      expect(checkProperty(law)).toEqual({ holds: true })
+    }
+  })
+
+  it('reads every resource its own catalog advertises', () => {
+    const listed = primitiveResult('resources/list')?.resources
+    const resources: unknown[] = Array.isArray(listed) ? listed : []
+    expect(resources.length).toBeGreaterThan(0)
+    for (const entry of resources) {
+      const uri = (entry as { uri?: unknown }).uri
+      expect(typeof uri).toBe('string')
+      expect(primitiveResult('resources/read', { uri })?.contents).toBeDefined()
+    }
+  })
+
+  it('refuses unknown CLI handles instead of throwing', () => {
+    const call = (...argv: string[]): unknown => runCli({ argv: ['incident-mcp', ...argv] })
+    const refused = [
+      ['tools', 'call', 'u', 'nope'],
+      ['tools', 'inspect', 'u', 'nope'],
+      ['resources', 'read', 'u', 'incident://unknown/thing'],
+      ['prompts', 'get', 'u', 'nope'],
+      ['tools', 'call', 'u', 'create_incident', '--json', 'not json'],
+    ]
+    for (const argv of refused) expect(call(...argv)).toMatchObject({ exit_code: 3 })
+    const runbook = call('resources', 'read', 'u', 'incident://runbooks/database')
+    expect(runbook).toMatchObject({ exit_code: 0 })
   })
 
   it('claims one remediation effect under concurrent retries', async () => {

@@ -771,6 +771,20 @@ describe('raw entry point', () => {
     expect(JSON.parse(errors.at(-1) ?? '{}')).toMatchObject({ code: -32603 })
   })
 
+  it('exits 3 when tools inspect names a tool the catalog does not advertise', async () => {
+    clearResponseCache()
+    const base = await launch()
+    const errors: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk))
+      return true
+    })
+    expect(await runNetworkCli(['tools', 'inspect', `${base}/raw/mcp`, 'no_such_tool'])).toBe(3)
+    expect(errors.join('')).toContain('Unknown tool')
+    clearResponseCache()
+  })
+
   it('rejects malformed, cyclic, and cache-scope-inconsistent list pages', async () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     let mode: 'malformed' | 'cursor' | 'scope' = 'malformed'
@@ -838,6 +852,7 @@ describe('raw entry point', () => {
       ['resources', 'list', url],
       ['resources', 'templates', url],
       ['resources', 'read', url, 'incident://topology/services'],
+      ['resources', 'read', url, 'incident://runbooks/database'],
       ['prompts', 'list', url],
       ['prompts', 'get', url, 'triage_incident', '{"incident_id":"i"}'],
       ['demo', url, '--approve'],

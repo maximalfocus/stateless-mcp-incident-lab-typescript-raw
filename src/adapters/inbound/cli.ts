@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { primitiveResult } from '../../application/catalogs.js'
+import { discoveryResult } from '../../protocol/version.js'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -11,10 +12,21 @@ function catalog(method: string, params: Record<string, unknown> = {}): Record<s
   return result
 }
 
+// Mirrors the networked CLI, which reports a JSON-RPC error from the server as exit code 3
+// rather than crashing, so an unknown handle is refused instead of throwing.
+function refuse(subject: string): Record<string, unknown> {
+  return { exit_code: 3, stdout: '', stderr: `Unknown ${subject}\n`, network_calls: 1 }
+}
+
 function jsonArguments(argv: readonly string[]): Record<string, unknown> {
   const marker = argv.indexOf('--json')
   if (marker < 0 || typeof argv[marker + 1] !== 'string') return {}
-  const value = JSON.parse(argv[marker + 1] ?? '{}') as unknown
+  let value: unknown
+  try {
+    value = JSON.parse(argv[marker + 1] ?? '{}') as unknown
+  } catch {
+    return {}
+  }
   return isObject(value) ? value : {}
 }
 
@@ -51,7 +63,9 @@ export function runCli(inputValue: unknown): unknown {
       },
     )
   }
-  if (group === 'discover') return output({ supportedVersions: ['2026-07-28'] })
+  if (group === 'discover') {
+    return output({ supportedVersions: discoveryResult().supportedVersions })
+  }
   if (group === 'tools' && action === 'list') {
     const toolsValue = catalog('tools/list').tools
     const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
@@ -66,8 +80,7 @@ export function runCli(inputValue: unknown): unknown {
     const toolsValue = catalog('tools/list').tools
     const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
     const tool = tools.find((value) => isObject(value) && value.name === argv[3])
-    if (!isObject(tool))
-      return { exit_code: 3, stdout: '', stderr: 'Unknown tool\n', network_calls: 1 }
+    if (!isObject(tool)) return refuse('tool')
     return output({
       name: tool.name,
       inputSchema: { type: isObject(tool.inputSchema) ? tool.inputSchema.type : undefined },
@@ -75,7 +88,11 @@ export function runCli(inputValue: unknown): unknown {
     })
   }
   if (group === 'tools' && action === 'call' && typeof argv[3] === 'string') {
-    const result = catalog('tools/call', { name: argv[3], arguments: jsonArguments(original) })
+    const result = primitiveResult('tools/call', {
+      name: argv[3],
+      arguments: jsonArguments(original),
+    })
+    if (result === undefined) return refuse('tool')
     return output(isObject(result.structuredContent) ? result.structuredContent : {})
   }
   if (group === 'resources' && action === 'list') {
@@ -95,7 +112,9 @@ export function runCli(inputValue: unknown): unknown {
     })
   }
   if (group === 'resources' && action === 'read' && typeof argv[3] === 'string') {
-    const contents = catalog('resources/read', { uri: argv[3] }).contents
+    const result = primitiveResult('resources/read', { uri: argv[3] })
+    if (result === undefined) return refuse('resource')
+    const contents = result.contents
     const content = Array.isArray(contents) && isObject(contents[0]) ? contents[0] : {}
     return output({ uri: content.uri, mimeType: content.mimeType })
   }
@@ -108,7 +127,11 @@ export function runCli(inputValue: unknown): unknown {
     })
   }
   if (group === 'prompts' && action === 'get' && typeof argv[3] === 'string') {
-    const result = catalog('prompts/get', { name: argv[3], arguments: jsonArguments(original) })
+    const result = primitiveResult('prompts/get', {
+      name: argv[3],
+      arguments: jsonArguments(original),
+    })
+    if (result === undefined) return refuse('prompt')
     const messages = Array.isArray(result.messages) ? result.messages : []
     return output({
       name: argv[3],

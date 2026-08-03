@@ -67,6 +67,11 @@ export function primitiveResult(
         text: '# API runbook\n\nInspect latency and downstream database health.',
         _meta: { revision: 1, updated_at: '2026-08-02T00:00:00Z' },
       },
+      'incident://runbooks/database': {
+        uri: 'incident://runbooks/database',
+        mimeType: 'text/markdown',
+        text: '# Database runbook\n\nInspect connection saturation and slow synthetic queries.',
+      },
     }
     const publicContent = publicResources[params.uri]
     if (publicContent !== undefined) {
