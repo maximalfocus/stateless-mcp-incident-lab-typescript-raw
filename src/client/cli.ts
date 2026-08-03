@@ -7,6 +7,7 @@ type RpcOptions = {
   noCache?: boolean
   wire?: boolean
   warning?: (message: string) => void
+  stale?: { seen: boolean }
 }
 
 const responseCache = new ResponseCache<JsonRpcResponse>()
@@ -137,6 +138,7 @@ export async function rpcCall(
     if (options.noCache !== true) {
       const stale = responseCache.get(key, true)
       if (stale !== undefined) {
+        if (options.stale !== undefined) options.stale.seen = true
         options.warning?.('Refresh failed; serving stale cached data.')
         return stale
       }
@@ -170,6 +172,71 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     params: unknown = {},
     id: string | number = 1,
   ): Promise<JsonRpcResponse> => await rpcCall(url, method, params, id, options)
+  const list = async (url: string, method: string): Promise<JsonRpcResponse> => {
+    const fieldByMethod: Readonly<Record<string, string>> = {
+      'tools/list': 'tools',
+      'resources/list': 'resources',
+      'resources/templates/list': 'resourceTemplates',
+      'prompts/list': 'prompts',
+    }
+    const field = fieldByMethod[method]
+    if (field === undefined) throw new TypeError(`Unsupported list method ${method}`)
+    const silentOptions = { ...options }
+    delete silentOptions.warning
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const items: unknown[] = []
+      const seenCursors = new Set<string>()
+      let cursor: string | undefined
+      let pageNumber = 0
+      let aggregate: Record<string, unknown> | undefined
+      let cacheScope: string | undefined
+      let minimumTtl = Number.POSITIVE_INFINITY
+      const stale = { seen: false }
+      do {
+        const response = await rpcCall(
+          url,
+          method,
+          cursor === undefined ? {} : { cursor },
+          pageNumber + 1,
+          attempt === 0 ? { ...silentOptions, stale } : { ...options, noCache: true },
+        )
+        if (stale.seen) break
+        if (response.error !== undefined) return response
+        const page = object(response.result)
+        if (!Array.isArray(page[field]) || page.resultType !== 'complete') {
+          throw new TypeError(`Malformed ${method} page`)
+        }
+        const hints = cacheHints(page)
+        if (hints === undefined || (cacheScope !== undefined && hints.cacheScope !== cacheScope)) {
+          throw new TypeError(`Inconsistent ${method} cache hints`)
+        }
+        cacheScope = hints.cacheScope
+        minimumTtl = Math.min(minimumTtl, hints.ttlMs)
+        items.push(...(page[field] as unknown[]))
+        aggregate ??= page
+        const next = page.nextCursor
+        if (next === undefined) cursor = undefined
+        else if (typeof next !== 'string' || seenCursors.has(next)) {
+          throw new TypeError(`Invalid ${method} nextCursor`)
+        } else {
+          seenCursors.add(next)
+          cursor = next
+        }
+        pageNumber += 1
+      } while (cursor !== undefined)
+      if (stale.seen) continue
+      return {
+        result: {
+          ...aggregate,
+          [field]: items,
+          ttlMs: minimumTtl,
+          cacheScope,
+          nextCursor: undefined,
+        },
+      }
+    }
+    throw new Error(`Unable to refresh the complete ${method} snapshot`)
+  }
   const filtered = argv.filter((value) => value !== '--wire' && value !== '--no-cache')
   const [group, action, url, name, rawArguments] = filtered
   if (group === undefined || action === undefined) return 2
@@ -214,9 +281,9 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
       })
     } else if (group === 'discover') response = await call(action, 'server/discover')
     else if (url === undefined) return 2
-    else if (group === 'tools' && action === 'list') response = await call(url, 'tools/list')
+    else if (group === 'tools' && action === 'list') response = await list(url, 'tools/list')
     else if (group === 'tools' && action === 'inspect') {
-      response = await call(url, 'tools/list')
+      response = await list(url, 'tools/list')
       const toolsValue = object(response.result).tools
       const tools: unknown[] = Array.isArray(toolsValue) ? toolsValue : []
       write(tools.find((tool) => object(tool).name === name) ?? null)
@@ -224,13 +291,13 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
     } else if (group === 'tools' && action === 'call' && name !== undefined) {
       response = await call(url, 'tools/call', { name, arguments: parseObject(rawArguments) })
     } else if (group === 'resources' && action === 'list') {
-      response = await call(url, 'resources/list')
+      response = await list(url, 'resources/list')
     } else if (group === 'resources' && action === 'templates') {
-      response = await call(url, 'resources/templates/list')
+      response = await list(url, 'resources/templates/list')
     } else if (group === 'resources' && action === 'read' && name !== undefined) {
       response = await call(url, 'resources/read', { uri: name })
     } else if (group === 'prompts' && action === 'list') {
-      response = await call(url, 'prompts/list')
+      response = await list(url, 'prompts/list')
     } else if (group === 'prompts' && action === 'get' && name !== undefined) {
       response = await call(url, 'prompts/get', { name, arguments: parseObject(rawArguments) })
     } else {

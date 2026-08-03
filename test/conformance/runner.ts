@@ -229,9 +229,75 @@ export function validateExpected(value: unknown, path = '$'): void {
   }
 }
 
-function validateMetadata(test: TestMetadata, dir: string): void {
-  if (!/^([A-Z]+)-\d{3}$/.test(test.spec_id)) throw new Error(`${dir}: invalid spec_id`)
-  if (!ALLOWED_BOUNDARIES.has(test.boundary)) throw new Error(`${dir}: unknown boundary`)
+export function validateMetadata(value: unknown, dir: string): asserts value is TestMetadata {
+  if (!isRecord(value)) throw new Error(`${dir}: test metadata must be an object`)
+  const baseKeys = [
+    'approved_at',
+    'approved_by',
+    'boundary',
+    'consumers',
+    'context',
+    'description',
+    'description_bdd',
+    'normalisation',
+    'providers',
+    'source',
+    'source_deps',
+    'spec_id',
+  ]
+  const extras = Object.keys(value)
+    .filter((key) => !baseKeys.includes(key))
+    .sort()
+  const validExtras =
+    extras.length === 0 ||
+    extras.join(',') === 'type_contract' ||
+    extras.join(',') === 'property' ||
+    extras.join(',') === 'adr,adr_repo'
+  if (
+    !validExtras ||
+    baseKeys.some((key) => !Object.hasOwn(value, key)) ||
+    Object.keys(value).length !== baseKeys.length + extras.length
+  ) {
+    throw new Error(`${dir}: unsupported test metadata shape`)
+  }
+  if (value.approved_at !== null || value.approved_by !== null) {
+    throw new Error(`${dir}: test metadata approval fields must be null`)
+  }
+  for (const field of ['consumers', 'normalisation', 'providers', 'source_deps']) {
+    if (!Array.isArray(value[field]) || !value[field].every((item) => typeof item === 'string')) {
+      throw new Error(`${dir}: ${field} must be a string array`)
+    }
+  }
+  for (const field of ['context', 'description', 'source']) {
+    if (typeof value[field] !== 'string' || value[field].length === 0) {
+      throw new Error(`${dir}: ${field} must be a non-empty string`)
+    }
+  }
+  if (
+    !isRecord(value.description_bdd) ||
+    Object.keys(value.description_bdd).sort().join(',') !== 'given,then,when' ||
+    !Object.values(value.description_bdd).every((item) => typeof item === 'string')
+  ) {
+    throw new Error(`${dir}: invalid description_bdd`)
+  }
+  if (typeof value.spec_id !== 'string' || !/^([A-Z]+)-\d{3}$/.test(value.spec_id)) {
+    throw new Error(`${dir}: invalid spec_id`)
+  }
+  if (typeof value.boundary !== 'string' || !ALLOWED_BOUNDARIES.has(value.boundary)) {
+    throw new Error(`${dir}: unknown boundary`)
+  }
+  if ('type_contract' in value && typeof value.type_contract !== 'string') {
+    throw new Error(`${dir}: type_contract must be a string`)
+  }
+  if ('property' in value && !isRecord(value.property)) {
+    throw new Error(`${dir}: property must be an object`)
+  }
+  if (
+    ('adr' in value && typeof value.adr !== 'string') ||
+    ('adr_repo' in value && typeof value.adr_repo !== 'string')
+  ) {
+    throw new Error(`${dir}: ADR metadata must be strings`)
+  }
 }
 
 async function discover(dir: string): Promise<string[]> {
@@ -255,7 +321,7 @@ function lanePaths(workitems: string, lane: string): Set<string> {
 }
 
 async function loadFixture(dir: string): Promise<Fixture> {
-  const test = (await readJson(join(dir, 'test.json'))) as unknown as TestMetadata
+  const test = await readJson(join(dir, 'test.json'))
   validateMetadata(test, dir)
   const relativeDir = `conformance/${relative(ROOT, dir)}`
   const expected = await readJson(join(dir, 'expected.json'))

@@ -501,6 +501,47 @@ describe('raw entry point', () => {
     expect(effects.reduce((sum, value) => sum + value, 0)).toBe(1)
   })
 
+  it('walks opaque list cursors, including the empty string, to a complete CLI snapshot', async () => {
+    clearResponseCache()
+    const requests: Array<Record<string, unknown>> = []
+    const output: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      output.push(String(chunk))
+      return true
+    })
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON request body')
+      const request = JSON.parse(init.body) as Record<string, unknown>
+      requests.push(request)
+      const params = (request.params ?? {}) as Record<string, unknown>
+      const first = !Object.hasOwn(params, 'cursor')
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              resultType: 'complete',
+              tools: [{ name: first ? 'first' : 'second' }],
+              ...(first ? { nextCursor: '' } : {}),
+              ttlMs: first ? 100 : 50,
+              cacheScope: 'public',
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+    expect(await runNetworkCli(['tools', 'list', 'https://example.test/raw/mcp'])).toBe(0)
+    expect(requests.map((request) => request.id)).toEqual([1, 2])
+    expect((requests[1]?.params as Record<string, unknown>).cursor).toBe('')
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+      tools: [{ name: 'first' }, { name: 'second' }],
+      ttlMs: 50,
+      cacheScope: 'public',
+    })
+  })
+
   it('runs every advertised CLI family through HTTP', async () => {
     const base = await launch()
     const url = `${base}/raw/mcp`

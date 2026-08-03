@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { main, matchValue, validateExpected } from './runner.js'
+import { main, matchValue, validateExpected, validateMetadata } from './runner.js'
 
 describe('raw conformance replay', () => {
   it('passes the complete selected lane in-process', async () => {
@@ -55,6 +55,37 @@ describe('strict golden matching', () => {
     expect(() => {
       validateExpected({ assertions: [{ type: 'strict_http_shape', ignored: true }] })
     }).toThrow('invalid strict_http_shape directive')
+  })
+
+  it('rejects missing, extra, and mistyped metadata fields', () => {
+    const metadata = {
+      approved_at: null,
+      approved_by: null,
+      boundary: 'http',
+      consumers: ['raw'],
+      context: 'context',
+      description: 'description',
+      description_bdd: { given: 'g', when: 'w', then: 't' },
+      normalisation: [],
+      providers: ['raw'],
+      source: 'PRD.md',
+      source_deps: [],
+      spec_id: 'TEST-001',
+    }
+    expect(() => {
+      validateMetadata(metadata, 'fixture')
+    }).not.toThrow()
+    expect(() => {
+      validateMetadata({ ...metadata, ignored: true }, 'fixture')
+    }).toThrow('unsupported test metadata shape')
+    const missing = { ...metadata } as Record<string, unknown>
+    delete missing.source
+    expect(() => {
+      validateMetadata(missing, 'fixture')
+    }).toThrow('unsupported test metadata shape')
+    expect(() => {
+      validateMetadata({ ...metadata, consumers: null }, 'fixture')
+    }).toThrow('must be a string array')
   })
 
   it('distinguishes directives from observable architecture assertions', () => {
