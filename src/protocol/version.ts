@@ -5,7 +5,7 @@ export const PROTOCOL_VERSION = '2026-07-28'
 const SERVER_INFO = { name: 'stateless-mcp-incident-lab', version: PROTOCOL_VERSION } as const
 
 export function serverMeta(
-  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+  replica = process.env.REPLICA_ID ?? process.env.HOSTNAME ?? 'raw-local-1',
 ): Record<string, unknown> {
   return {
     'io.modelcontextprotocol/serverInfo': SERVER_INFO,
@@ -14,7 +14,7 @@ export function serverMeta(
 }
 
 export function discoveryResult(
-  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+  replica = process.env.REPLICA_ID ?? process.env.HOSTNAME ?? 'raw-local-1',
 ): Record<string, unknown> {
   return {
     resultType: 'complete',

@@ -7,7 +7,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 export function catalogMeta(
-  replica = process.env.REPLICA_ID ?? 'raw-local-1',
+  replica = process.env.REPLICA_ID ?? process.env.HOSTNAME ?? 'raw-local-1',
 ): Record<string, unknown> {
   return {
     'io.modelcontextprotocol/serverInfo': SERVER_INFO,

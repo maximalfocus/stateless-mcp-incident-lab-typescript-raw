@@ -201,7 +201,7 @@ function telemetryRecord(
     method: requestBody.method,
     name,
     request_id: requestBody.id,
-    replica: process.env.REPLICA_ID ?? 'raw-local-1',
+    replica: process.env.REPLICA_ID ?? process.env.HOSTNAME ?? 'raw-local-1',
     latency_ms: Math.max(0, Date.now() - startedAt),
     result_type: 'error' in responseBody || result.isError === true ? 'error' : 'complete',
     ...(traceMatch?.[1] === undefined ? {} : { trace_id: traceMatch[1].toLowerCase() }),
