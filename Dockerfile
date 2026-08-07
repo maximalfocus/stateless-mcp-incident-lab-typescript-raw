@@ -3,7 +3,7 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json dependency-exceptions.json ./
 RUN npm ci
-COPY tsconfig.json eslint.config.js vitest.config.ts stryker.config.mjs cdd-manifest.json ./
+COPY Dockerfile tsconfig.json eslint.config.js vitest.config.ts stryker.config.mjs cdd-manifest.json ./
 COPY scripts ./scripts
 COPY src ./src
 COPY test ./test
