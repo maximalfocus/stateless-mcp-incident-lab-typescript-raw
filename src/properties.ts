@@ -59,16 +59,19 @@ function tamperRejected(example: unknown): boolean {
   return candidate.length === signature.length && !timingSafeEqual(candidate, signature)
 }
 
+export function positiveIterations(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback
+}
+
 export function checkProperty(property: Record<string, unknown>): unknown {
   const target = property.target
   const examples = Array.isArray(property.examples) ? (property.examples as unknown[]) : []
   let holds = false
   if (target === 'encode_header') {
     // RUNNER-CONTRACT: emit holds only after all declared iterations hold, not just the examples.
-    const iterations =
-      typeof property.iterations === 'number' && property.iterations > 0
-        ? Math.floor(property.iterations)
-        : 200
+    const iterations = positiveIterations(property.iterations, 200)
     const generated = Array.from({ length: iterations }, (_, index) => `值-${String(index)}-api`)
     holds = [...examples, ...generated].every(
       (value) => typeof value === 'string' && decodeHeaderValue(encodeHeaderValue(value)) === value,
@@ -106,10 +109,7 @@ export function checkProperty(property: Record<string, unknown>): unknown {
     // RUNNER-CONTRACT: every declared iteration flips an additional deterministic bit of the
     // same example payload, so "every one-bit mutation is rejected" holds only when all of them
     // are.
-    const iterations =
-      typeof property.iterations === 'number' && property.iterations > 0
-        ? Math.floor(property.iterations)
-        : 0
+    const iterations = positiveIterations(property.iterations, 0)
     holds =
       examples.length > 0 &&
       examples.every((value) => {

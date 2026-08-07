@@ -21,7 +21,7 @@ import {
   validHeaderAnnotation,
 } from '../../src/client/http.js'
 import { transition } from '../../src/domain/incident.js'
-import { checkProperty } from '../../src/properties.js'
+import { checkProperty, positiveIterations } from '../../src/properties.js'
 import { decodeHeaderValue, encodeHeaderValue } from '../../src/protocol/headers.js'
 import { signRequestState, verifyRequestState } from '../../src/protocol/request-state.js'
 import { executeFunction as securityFunction } from '../../src/protocol/validation.js'
@@ -341,6 +341,10 @@ describe('reachable defensive paths', () => {
   })
 
   it('honors declared property iterations', () => {
+    expect(positiveIterations(undefined, 200)).toBe(200)
+    expect(positiveIterations(0, 200)).toBe(200)
+    expect(positiveIterations(Number.NaN, 200)).toBe(200)
+    expect(positiveIterations(3.9, 200)).toBe(3)
     expect(
       checkProperty({
         target: 'verify_request_state',
