@@ -99,13 +99,18 @@ export async function handleHttp(
   const meta = isObject(requestParams._meta) ? requestParams._meta : undefined
   const bodyVersion = meta?.['io.modelcontextprotocol/protocolVersion']
   if (typeof bodyVersion !== 'string') {
+    // PRD § Required request metadata: a request missing the required params._meta field is
+    // reported as such (conformance VER-002), while a present _meta object missing only the
+    // version key names the precise missing field.
+    const field =
+      meta === undefined ? 'params._meta' : 'params._meta.io.modelcontextprotocol/protocolVersion'
     return response(400, {
       jsonrpc: '2.0',
       id: body.id,
       error: {
         code: -32602,
         message: 'Invalid params',
-        data: { field: 'params._meta.io.modelcontextprotocol/protocolVersion', reason: 'required' },
+        data: { field, reason: 'required' },
       },
     })
   }

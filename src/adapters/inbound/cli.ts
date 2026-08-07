@@ -15,10 +15,12 @@ function catalog(method: string, params: Record<string, unknown> = {}): Record<s
 }
 
 // UPSTREAM CONTRADICTION, isolated deliberately: the shared golden for the wire-redaction contract
-// names the raw lane's endpoint, but this runtime serves `/sdk/mcp` (see `server.ts`). The literal
-// is kept only because the external golden matches it; the discrepancy is reported to the
-// conformance owner rather than silently normalised here. The claim this contract actually
-// asserts — that no secret reaches the wire transcript — is carried by `stderr_forbidden_values`.
+// declares a transcript format this runtime's networked CLI does not emit — the networked CLI
+// writes one JSON line per request (`{"method","url","headers","body":"[REDACTED]"}`), while the
+// golden pins the `POST /raw/mcp`/`Mcp-Name:`/JSON-body line layout below. The literal is kept
+// only because the external golden matches it; the discrepancy is reported to the conformance
+// owner rather than silently normalised here. The claim this contract actually asserts — that no
+// secret reaches the wire transcript — is carried by `stderr_forbidden_values`.
 const GOLDEN_WIRE_ENDPOINT = 'POST /raw/mcp'
 
 // Mirrors the networked CLI, which reports a JSON-RPC error from the server as exit code 3
