@@ -249,12 +249,13 @@ export function validateMetadata(value: unknown, dir: string): asserts value is 
   const extras = Object.keys(value)
     .filter((key) => !baseKeys.includes(key))
     .sort()
-  const validExtras =
-    extras.length === 0 ||
-    extras.join(',') === 'type_contract' ||
-    extras.join(',') === 'property' ||
-    extras.join(',') === 'adr,adr_repo'
-  if (!validExtras || baseKeys.some((key) => !Object.hasOwn(value, key))) {
+  const allowedExtras = new Set(['adr', 'adr_repo', 'property', 'type_contract'])
+  const hasCompleteAdr = Object.hasOwn(value, 'adr') === Object.hasOwn(value, 'adr_repo')
+  if (
+    extras.some((key) => !allowedExtras.has(key)) ||
+    !hasCompleteAdr ||
+    baseKeys.some((key) => !Object.hasOwn(value, key))
+  ) {
     throw new Error(`${dir}: unsupported test metadata shape`)
   }
   if (value.approved_at !== null || value.approved_by !== null) {

@@ -93,6 +93,15 @@ describe('strict golden matching', () => {
     expect(() => {
       validateMetadata({ ...metadata, consumers: null }, 'fixture')
     }).toThrow('must be a string array')
+    expect(() => {
+      validateMetadata(
+        { ...metadata, adr: 'ADR-0005', adr_repo: 'owner/architecture', type_contract: 'edge' },
+        'fixture',
+      )
+    }).not.toThrow()
+    expect(() => {
+      validateMetadata({ ...metadata, adr: 'ADR-0005' }, 'fixture')
+    }).toThrow('unsupported test metadata shape')
   })
 
   it('distinguishes directives from observable architecture assertions', () => {
