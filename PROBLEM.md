@@ -1,8 +1,8 @@
 # Problem Charter
 
 - **Producer:** cdd-implement
-- **Generated:** 2026-08-02
-- **Source of truth:** `../stateless-mcp-incident-lab-prd/PRD.md` and `PLAN-001-stateless-core.md` at `91cd6b984a27c29cca8e8505a7ec1f088251650f`; `../stateless-mcp-incident-lab-conformance/` at `5609e7d532ec05a9def264f732bd7f2a4442e534`; `../stateless-mcp-incident-lab-architecture/` at `182e756eb4bdbb6c27fd66d185aff90466c28697`; captured MCP `2026-07-28` schema under the PRD repository.
+- **Generated:** 2026-08-07
+- **Source of truth:** `../stateless-mcp-incident-lab-prd/PRD.md` and `PLAN-001-stateless-core.md` at `891bb346f848e163fe1ce83753b323ffc9b18df7`; `../stateless-mcp-incident-lab-conformance/` at `18fa9421c0d0280fdc6bd9d572f7187deaa8ece6`; `../stateless-mcp-incident-lab-architecture/` at `0a15ca93487eef3883a1d34b69926531fc0529cb`; captured MCP `2026-07-28` schema under the PRD repository.
 
 ## Problem
 
