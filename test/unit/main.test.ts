@@ -10,6 +10,7 @@ const servers: ReturnType<typeof createRawServer>[] = []
 const originalNodeEnv = process.env.NODE_ENV
 const originalSecret = process.env.MCP_REQUEST_STATE_SECRET
 const originalEffectStore = process.env.EFFECT_STORE
+const originalHost = process.env.HOST
 afterEach(async () => {
   vi.restoreAllMocks()
   if (originalNodeEnv === undefined) delete process.env.NODE_ENV
@@ -18,6 +19,8 @@ afterEach(async () => {
   else process.env.MCP_REQUEST_STATE_SECRET = originalSecret
   if (originalEffectStore === undefined) delete process.env.EFFECT_STORE
   else process.env.EFFECT_STORE = originalEffectStore
+  if (originalHost === undefined) delete process.env.HOST
+  else process.env.HOST = originalHost
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -65,6 +68,13 @@ describe('raw entry point', () => {
     const server = await startRawServer({ host: '127.0.0.1', port: 0 })
     servers.push(server)
     expect((server.address() as AddressInfo).port).toBeGreaterThan(0)
+  })
+
+  it('honors the HOST environment variable as the bind address', async () => {
+    process.env.HOST = '0.0.0.0'
+    const server = await startRawServer({ port: 0 })
+    servers.push(server)
+    expect((server.address() as AddressInfo).address).toBe('0.0.0.0')
   })
 
   it('fails production readiness without persistence and a shared signing secret', async () => {
