@@ -185,6 +185,15 @@ export function primitiveError(
         data: { reason: 'Unknown tool', name: params.name },
       }
     }
+    if ('arguments' in params && !isObject(params.arguments)) {
+      // A present-but-non-object arguments block is a protocol-shape failure, distinct from
+      // missing required fields; the boundary reports it as such.
+      return {
+        code: -32602,
+        message: 'Invalid params',
+        data: { field: 'params.arguments', reason: 'must be an object' },
+      }
+    }
     const args = isObject(params.arguments) ? params.arguments : undefined
     const schema = isObject(tool.inputSchema) ? tool.inputSchema : {}
     const required = Array.isArray(schema.required)
@@ -235,29 +244,55 @@ export function primitiveError(
 export function executeFunction(inputValue: unknown): unknown {
   if (!isObject(inputValue)) throw new TypeError('Primitive operation must be an object')
   if (inputValue.operation === 'classify_tool_failure') {
+    // Derive each case's classification from the request by running it through the same tool
+    // dispatch the HTTP boundary uses; unknown cases fail closed instead of narrating a constant.
+    const cases = Array.isArray(inputValue.cases) ? inputValue.cases : []
+    if (cases.length === 0) {
+      throw new TypeError('classify_tool_failure requires at least one case')
+    }
     return {
-      observations: [
-        {
-          name: 'domain_failure',
+      observations: cases.map((value) => {
+        if (!isObject(value) || typeof value.name !== 'string' || !isObject(value.request)) {
+          throw new TypeError('classify_tool_failure case requires name and request')
+        }
+        const request = value.request
+        const params = isObject(request.params) ? request.params : {}
+        if ('arguments' in params && !isObject(params.arguments)) {
+          return {
+            name: value.name,
+            kind: 'jsonrpc_error',
+            error: {
+              code: -32602,
+              message: 'Invalid params',
+              data: { field: 'params.arguments', reason: 'must be an object' },
+            },
+          }
+        }
+        if (request.method !== 'tools/call' || typeof params.name !== 'string') {
+          throw new TypeError(`classify_tool_failure cannot classify case ${value.name}`)
+        }
+        const result = callTool(params.name, params.arguments)
+        if (result === undefined) {
+          return {
+            name: value.name,
+            kind: 'jsonrpc_error',
+            error: {
+              code: -32602,
+              message: 'Invalid params',
+              data: { reason: 'Unknown tool', name: params.name },
+            },
+          }
+        }
+        return {
+          name: value.name,
           kind: 'tool_result',
           result: {
-            resultType: 'complete',
-            content: [
-              { type: 'text', text: 'Unknown or expired incident; create another incident.' },
-            ],
-            isError: true,
+            resultType: result.resultType,
+            content: result.content,
+            isError: result.isError,
           },
-        },
-        {
-          name: 'malformed_protocol_input',
-          kind: 'jsonrpc_error',
-          error: {
-            code: -32602,
-            message: 'Invalid params',
-            data: { field: 'params.arguments', reason: 'must be an object' },
-          },
-        },
-      ],
+        }
+      }),
     }
   }
   if (inputValue.operation !== 'walk_paginated_list') {

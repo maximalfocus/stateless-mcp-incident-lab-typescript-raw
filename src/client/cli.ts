@@ -361,6 +361,13 @@ export async function runNetworkCli(argv: readonly string[]): Promise<number> {
       write(response.error, process.stderr)
       return 3
     }
+    const result = object(response.result)
+    if (result.isError === true) {
+      // Domain failures surface as isError tool results; keep them distinct from success (0),
+      // protocol errors (3), and transport failures (5) — the exit-code contract the CLI lane pins.
+      write(response.result, process.stderr)
+      return 4
+    }
     write(response.result)
     return 0
   } catch (error) {

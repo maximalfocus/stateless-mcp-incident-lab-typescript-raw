@@ -193,6 +193,16 @@ export async function runCli(inputValue: unknown): Promise<unknown> {
       arguments: jsonArguments(original),
     })
     if (result === undefined) return refuse('tool')
+    if (result.isError === true) {
+      // Mirror the networked CLI: a domain-failure tool result is an error outcome (exit 4),
+      // never a success printed to stdout.
+      return {
+        exit_code: 4,
+        stdout: '',
+        stderr: `${JSON.stringify(result)}\n`,
+        network_calls: 1,
+      }
+    }
     return output(isObject(result.structuredContent) ? result.structuredContent : {})
   }
   if (group === 'resources' && action === 'list') {

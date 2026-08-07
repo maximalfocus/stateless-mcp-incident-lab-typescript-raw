@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { main, matchValue, validateExpected, validateMetadata } from './runner.js'
+import {
+  main,
+  matchValue,
+  seededEffectStore,
+  validateExpected,
+  validateFixtureInput,
+  validateMetadata,
+  validateSeed,
+} from './runner.js'
 
 describe('raw conformance replay', () => {
   it('passes the complete selected lane in-process', async () => {
@@ -153,5 +161,41 @@ describe('strict golden matching', () => {
     }
     expect(matchValue(expected, { headers: {} })).toEqual([])
     expect(matchValue(expected, { headers: { 'mcp-session-id': 'x' } })).not.toEqual([])
+  })
+
+  it('fails closed on malformed fixture input and seed shapes', () => {
+    const dir = 'fixture'
+    expect(() => {
+      validateFixtureInput({ fixture: 'EVIL' }, dir)
+    }).toThrow('closed precondition set')
+    expect(() => {
+      validateFixtureInput({ state_fault: 'nonsense' }, dir)
+    }).toThrow('closed fault set')
+    expect(() => {
+      validateFixtureInput([], dir)
+    }).toThrow('input must be an object')
+    expect(() => {
+      validateSeed({ fixture: 'EVIL' }, dir)
+    }).toThrow('closed precondition set')
+    expect(() => {
+      validateSeed({ effect_claims: 'x' }, dir)
+    }).toThrow('must be an array')
+    expect(() => {
+      validateSeed(null, dir)
+    }).not.toThrow()
+    expect(() => {
+      validateSeed({ fixture: 'SEEDED-DETERMINISTIC-INCIDENT-LAB', effect_claims: [] }, dir)
+    }).not.toThrow()
+  })
+
+  it('seeds the at-most-once effect store from effect_claims', async () => {
+    expect(seededEffectStore(null)).toBeUndefined()
+    expect(seededEffectStore({ incidents: [] })).toBeUndefined()
+    const store = seededEffectStore({ effect_claims: ['REMEDIATION-001'] })
+    expect(store).toBeDefined()
+    if (store !== undefined) {
+      expect(await store.claim('REMEDIATION-001')).toBe(false)
+      expect(await store.claim('OTHER')).toBe(true)
+    }
   })
 })

@@ -10,6 +10,7 @@ import { handleHttp } from '../../src/adapters/inbound/http.js'
 import { verifySecurity } from '../../src/adapters/inbound/security.js'
 import { handleSse } from '../../src/adapters/inbound/sse.js'
 import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
+import { MemoryEffectStore, type EffectStore } from '../../src/application/effects.js'
 import { executeFunction as catalogFunction } from '../../src/application/catalogs.js'
 import { runStateMachine } from '../../src/application/incidents.js'
 import { executeFunction as cacheFunction } from '../../src/client/cache.js'
@@ -65,6 +66,16 @@ const ALLOWED_BOUNDARIES = new Set([
   'trace-span',
   'workflow-assertion',
 ])
+// RUNNER-CONTRACT: input.json.fixture is closed to exactly these preconditions and none of them
+// may supply an expected value; seed.json's fixture field names the same closed set.
+const FIXTURE_NAMES = new Set([
+  'SEEDED-DETERMINISTIC-INCIDENT-LAB',
+  'fresh_process',
+  'accepted-remediation',
+  'adversarial-request',
+])
+// RUNNER-CONTRACT: state_fault may select exactly these four signed-state faults.
+const STATE_FAULTS = new Set(['tampered', 'expired', 'method_mismatch', 'arguments_mismatch'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -298,6 +309,56 @@ export function validateMetadata(value: unknown, dir: string): asserts value is 
   }
 }
 
+// RUNNER-CONTRACT: input.json.fixture is closed to exactly four preconditions, state_fault is
+// closed to the four signed-state faults, and the committed seed.json carries only the declared
+// persisted-state fields. Malformed or unsupported contract input fails closed here rather than
+// being silently ignored.
+export function validateFixtureInput(value: unknown, dir: string): asserts value is Json {
+  if (!isRecord(value)) throw new Error(`${dir}: input must be an object`)
+  if (
+    'fixture' in value &&
+    (typeof value.fixture !== 'string' || !FIXTURE_NAMES.has(value.fixture))
+  ) {
+    throw new Error(`${dir}: input.fixture is outside the closed precondition set`)
+  }
+  if (
+    'state_fault' in value &&
+    (typeof value.state_fault !== 'string' || !STATE_FAULTS.has(value.state_fault))
+  ) {
+    throw new Error(`${dir}: input.state_fault is outside the closed fault set`)
+  }
+}
+
+export function validateSeed(value: unknown, dir: string): void {
+  if (value === null) return
+  if (!isRecord(value)) throw new Error(`${dir}: seed must be an object or null`)
+  if (
+    'fixture' in value &&
+    (typeof value.fixture !== 'string' || !FIXTURE_NAMES.has(value.fixture))
+  ) {
+    throw new Error(`${dir}: seed.fixture is outside the closed precondition set`)
+  }
+  for (const field of ['effect_claims', 'incidents', 'remediations']) {
+    if (field in value && !Array.isArray(value[field])) {
+      throw new Error(`${dir}: seed.${field} must be an array`)
+    }
+  }
+}
+
+// The persisted at-most-once set from seed.json: remediation IDs already claimed must be claimed
+// again before the fixture request executes, so a retry of a claimed effect reports effect_count 0
+// exactly like a replica that already applied it. An empty seed contributes no store.
+export function seededEffectStore(seedValue: Json): EffectStore | undefined {
+  if (!isRecord(seedValue)) return undefined
+  const claims = Array.isArray(seedValue.effect_claims)
+    ? seedValue.effect_claims.filter((value): value is string => typeof value === 'string')
+    : []
+  if (claims.length === 0) return undefined
+  const store = new MemoryEffectStore()
+  for (const claim of claims) void store.claim(claim)
+  return store
+}
+
 async function discover(dir: string): Promise<string[]> {
   const found: string[] = []
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -325,14 +386,18 @@ async function loadFixture(dir: string): Promise<Fixture> {
   const relativeDir = `conformance/${relative(ROOT, dir)}`
   const expected = await readJson(join(dir, 'expected.json'))
   validateExpected(expected)
+  const input = await readJson(join(dir, 'input.json'))
+  validateFixtureInput(input, dir)
+  const seed = await readJson(join(dir, 'seed.json'), null)
+  validateSeed(seed, dir)
   return {
     dir,
     relativeDir,
     category: relative(ROOT, dir).split('/')[0] ?? '',
     test,
-    input: await readJson(join(dir, 'input.json')),
+    input,
     request: await readJson(join(dir, 'request.json'), {}),
-    seed: await readJson(join(dir, 'seed.json'), null),
+    seed,
     expected,
   }
 }
@@ -414,39 +479,40 @@ async function execute(fixtureValue: Fixture): Promise<unknown> {
         ...(fixture.input.compare === 'normalized_response' ? { equivalent: true } : {}),
       }
     }
-    const handler =
-      fixture.category === 'versioning' && fixture.test.spec_id !== 'VER-008'
-        ? handleVersionHttp
-        : handleHttp
-    const observation = await handler(fixture.request, fixture.seed, fixture.input)
+    // Only the client-version-recovery operation exercises the version adapter; every other
+    // versioning fixture runs the same handler the network server uses.
+    const observation =
+      isRecord(fixture.input) && fixture.input.operation === 'discover_with_version_recovery'
+        ? await handleVersionHttp(fixture.request, fixture.seed, fixture.input)
+        : await handleHttp(
+            fixture.request,
+            fixture.seed,
+            fixture.input,
+            seededEffectStore(fixture.seed),
+          )
     const observationObject = isRecord(observation) ? observation : {}
     const input = isRecord(fixture.input) ? fixture.input : {}
-    if (fixture.test.spec_id === 'MRTR-006') {
-      return {
-        ...observationObject,
-        observations: {
-          initial_request_id: input.initial_request_id,
-          retry_request_id: input.retry_request_id,
-        },
+    // RUNNER-CONTRACT: when the golden declares harness observations, they are carried by the
+    // fixture input (the exchange cannot expose pre-retry state to an in-process harness). Echo
+    // them only after validating that the golden declares scalars and the input provides them;
+    // a malformed declaration fails rather than passing on status/headers/body alone.
+    const expectedRecord = isRecord(fixture.expected) ? fixture.expected : {}
+    const declaredObservations = isRecord(expectedRecord.observations)
+      ? expectedRecord.observations
+      : undefined
+    if (declaredObservations !== undefined) {
+      const echoed: Record<string, Json> = {}
+      for (const [key, expectedValue] of Object.entries(declaredObservations)) {
+        if (typeof expectedValue !== 'string' && typeof expectedValue !== 'number') {
+          throw new Error(`observations.${key} must declare a scalar expected value`)
+        }
+        const value = input[key]
+        if (typeof value !== 'string' && typeof value !== 'number') {
+          throw new Error(`observations.${key} is not declared by the fixture input`)
+        }
+        echoed[key] = value
       }
-    }
-    if (fixture.test.spec_id === 'MRTR-007') {
-      const request = isRecord(fixture.request) ? fixture.request : {}
-      const body = isRecord(request.body) ? request.body : {}
-      const params = isRecord(body.params) ? body.params : {}
-      const echoed =
-        typeof params.requestState === 'string' &&
-        verifyRequestState(params.requestState) !== undefined
-      return { ...observationObject, observations: { request_state_echoed_exactly: echoed } }
-    }
-    if (fixture.test.spec_id === 'MRTR-016') {
-      return {
-        ...observationObject,
-        observations: {
-          initial_replica: input.initial_replica,
-          retry_replica: input.retry_replica,
-        },
-      }
+      return { ...observationObject, observations: echoed }
     }
     return observation
   }

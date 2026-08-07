@@ -183,11 +183,14 @@ export function callTool(name: string, argumentsValue: unknown): JsonObject | un
     })
   }
   if (name === 'get_incident' && typeof args.incident_id === 'string') {
-    return toolResult({
-      incident_id: args.incident_id,
-      status: 'OPEN',
-      related_handles: [],
-    })
+    // The stateless catalog cannot verify an incident handle; the stateful server path owns real
+    // lookups. A handle it cannot prove exists is refused like the stateful domain does, so the
+    // stateless path never claims an unknown incident is open.
+    return {
+      resultType: 'complete',
+      content: [{ type: 'text', text: 'Unknown or expired incident; create another incident.' }],
+      isError: true,
+    }
   }
   if (name === 'propose_remediation' && typeof args.incident_id === 'string') {
     return toolResult({

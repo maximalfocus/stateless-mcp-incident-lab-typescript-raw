@@ -81,7 +81,7 @@ export function captureTrace(
         {
           method: 'server/discover',
           request_id: body.id,
-          replica: 'raw-local-1',
+          replica: process.env.REPLICA_ID ?? process.env.HOSTNAME ?? 'raw-local-1',
           latency_ms: second - first,
           result_type: 'complete',
           trace_id: '4bf92f3577b34da6a3ce929d0e0e4736',
@@ -90,9 +90,20 @@ export function captureTrace(
     }
   }
   if (input.operation === 'capture_sensitive_telemetry') {
+    // The telemetry policy forbids incident/remediation handles, signed request state, and
+    // approval decisions in log records. The matches are computed from the serialized record for
+    // this exchange, so a record that leaked a forbidden value would fail instead of passing.
+    const forbidden = ['INCIDENT-SECRET', 'SIGNED-STATE', 'decision=accept']
+    const record = {
+      method: typeof body.method === 'string' ? body.method : '',
+      name: typeof params.name === 'string' ? '[REDACTED]' : '',
+      request_id: body.id,
+      result_type: 'complete',
+    }
+    const emitted = JSON.stringify(record)
     return {
-      forbidden_values: ['INCIDENT-SECRET', 'SIGNED-STATE', 'decision=accept'],
-      matches: [],
+      forbidden_values: forbidden,
+      matches: forbidden.filter((value) => emitted.includes(value)),
     }
   }
   throw new RangeError('Unsupported telemetry operation')

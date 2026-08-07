@@ -64,7 +64,12 @@ export function checkProperty(property: Record<string, unknown>): unknown {
   const examples = Array.isArray(property.examples) ? (property.examples as unknown[]) : []
   let holds = false
   if (target === 'encode_header') {
-    const generated = Array.from({ length: 200 }, (_, index) => `值-${String(index)}-api`)
+    // RUNNER-CONTRACT: emit holds only after all declared iterations hold, not just the examples.
+    const iterations =
+      typeof property.iterations === 'number' && property.iterations > 0
+        ? Math.floor(property.iterations)
+        : 200
+    const generated = Array.from({ length: iterations }, (_, index) => `值-${String(index)}-api`)
     holds = [...examples, ...generated].every(
       (value) => typeof value === 'string' && decodeHeaderValue(encodeHeaderValue(value)) === value,
     )
@@ -98,7 +103,24 @@ export function checkProperty(property: Record<string, unknown>): unknown {
       return JSON.stringify(first) === JSON.stringify(second)
     })
   } else if (target === 'verify_request_state') {
-    holds = examples.length > 0 && examples.every(tamperRejected)
+    // RUNNER-CONTRACT: every declared iteration flips an additional deterministic bit of the
+    // same example payload, so "every one-bit mutation is rejected" holds only when all of them
+    // are.
+    const iterations =
+      typeof property.iterations === 'number' && property.iterations > 0
+        ? Math.floor(property.iterations)
+        : 0
+    holds =
+      examples.length > 0 &&
+      examples.every((value) => {
+        if (!tamperRejected(value)) return false
+        if (iterations === 0 || !isObject(value)) return true
+        const payload = Buffer.from(JSON.stringify(value.payload), 'utf8')
+        for (let index = 1; index < iterations; index += 1) {
+          if (!tamperRejected({ ...value, bit: (index * 7) % (payload.length * 8) })) return false
+        }
+        return true
+      })
   } else if (target === 'execute_on_replica') {
     holds = examples.every((value) => {
       if (!isObject(value) || !isObject(value.request) || !Array.isArray(value.replicas))

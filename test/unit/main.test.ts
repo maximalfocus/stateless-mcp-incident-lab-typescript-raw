@@ -890,4 +890,39 @@ describe('raw entry point', () => {
     expect(await runNetworkCli(['tools', 'call', url, 'unknown'])).toBe(3)
     expect(await runNetworkCli(['discover', 'http://127.0.0.1:1/raw/mcp'])).toBe(5)
   })
+
+  it('exits 4 on a domain-failure tool result through the network boundary', async () => {
+    clearResponseCache()
+    const base = await launch()
+    const url = `${base}/raw/mcp`
+    const errors: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk))
+      return true
+    })
+    expect(
+      await runNetworkCli(['tools', 'call', url, 'get_incident', '{"incident_id":"UNKNOWN"}']),
+    ).toBe(4)
+    expect(errors.join('')).toContain('Unknown or expired incident')
+    clearResponseCache()
+  })
+
+  it('redacts request bodies and secrets from the networked CLI wire transcript', async () => {
+    clearResponseCache()
+    const base = await launch()
+    const url = `${base}/raw/mcp`
+    const errors: string[] = []
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      errors.push(String(chunk))
+      return true
+    })
+    const args = JSON.stringify({ title: 'x', severity: 'high', suspected_services: ['api'] })
+    expect(await runNetworkCli(['--wire', 'tools', 'call', url, 'create_incident', args])).toBe(0)
+    const wire = errors.join('')
+    expect(wire).toContain('"body":"[REDACTED]"')
+    expect(wire).not.toContain('suspected_services')
+    clearResponseCache()
+  })
 })

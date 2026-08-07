@@ -5,6 +5,7 @@ import { handleSse } from '../../src/adapters/inbound/sse.js'
 import { captureTrace } from '../../src/adapters/outbound/telemetry.js'
 import {
   executeFunction as catalogFunction,
+  primitiveError,
   primitiveResult,
 } from '../../src/application/catalogs.js'
 import {
@@ -253,6 +254,122 @@ describe('reachable defensive paths', () => {
     ).toEqual({ holds: false })
   })
 
+  it('classifies tool failures from the request instead of narrating them', () => {
+    expect(primitiveError('tools/call', { name: 'get_incident', arguments: 'bad' })).toEqual({
+      code: -32602,
+      message: 'Invalid params',
+      data: { field: 'params.arguments', reason: 'must be an object' },
+    })
+    expect(
+      catalogFunction({
+        operation: 'classify_tool_failure',
+        cases: [
+          {
+            name: 'domain_failure',
+            request: {
+              method: 'tools/call',
+              params: { name: 'get_incident', arguments: { incident_id: 'UNKNOWN' } },
+            },
+          },
+          {
+            name: 'malformed_protocol_input',
+            request: {
+              method: 'tools/call',
+              params: { name: 'get_incident', arguments: 'not-an-object' },
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      observations: [
+        {
+          name: 'domain_failure',
+          kind: 'tool_result',
+          result: {
+            resultType: 'complete',
+            content: [
+              { type: 'text', text: 'Unknown or expired incident; create another incident.' },
+            ],
+            isError: true,
+          },
+        },
+        {
+          name: 'malformed_protocol_input',
+          kind: 'jsonrpc_error',
+          error: {
+            code: -32602,
+            message: 'Invalid params',
+            data: { field: 'params.arguments', reason: 'must be an object' },
+          },
+        },
+      ],
+    })
+    expect(() => catalogFunction({ operation: 'classify_tool_failure', cases: [] })).toThrow(
+      'at least one case',
+    )
+    const caseWithoutRequest = { operation: 'classify_tool_failure', cases: [{ name: 'x' }] }
+    expect(() => catalogFunction(caseWithoutRequest)).toThrow('requires name and request')
+    expect(() =>
+      catalogFunction({
+        operation: 'classify_tool_failure',
+        cases: [{ name: 'x', request: { method: 'server/discover', params: {} } }],
+      }),
+    ).toThrow('cannot classify')
+    expect(
+      catalogFunction({
+        operation: 'classify_tool_failure',
+        cases: [
+          {
+            name: 'unknown',
+            request: { method: 'tools/call', params: { name: 'unknown', arguments: {} } },
+          },
+        ],
+      }),
+    ).toEqual({
+      observations: [
+        {
+          name: 'unknown',
+          kind: 'jsonrpc_error',
+          error: {
+            code: -32602,
+            message: 'Invalid params',
+            data: { reason: 'Unknown tool', name: 'unknown' },
+          },
+        },
+      ],
+    })
+  })
+
+  it('honors declared property iterations', () => {
+    expect(
+      checkProperty({
+        target: 'verify_request_state',
+        iterations: 50,
+        examples: [
+          {
+            secret_hex: '000102030405060708090a0b0c0d0e0f',
+            payload: {
+              method: 'tools/call',
+              arguments_digest: 'sha256:fixture',
+              issued_at: '2026-08-02T00:00:00Z',
+              expires_at: '2026-08-02T00:05:00Z',
+            },
+            bit: 0,
+          },
+        ],
+      }),
+    ).toEqual({ holds: true })
+    expect(checkProperty({ target: 'encode_header', iterations: 3, examples: [] })).toEqual({
+      holds: true,
+    })
+    expect(checkProperty({ target: 'encode_header', iterations: 3, examples: ['plain'] })).toEqual({
+      holds: true,
+    })
+    expect(
+      checkProperty({ target: 'verify_request_state', iterations: 10, examples: [{}] }),
+    ).toEqual({ holds: false })
+  })
+
   it('derives replica independence and at-most-once effects from real responses', () => {
     for (const method of ['server/discover', 'tools/list']) {
       expect(
@@ -308,6 +425,15 @@ describe('reachable defensive paths', () => {
       ['tools', 'call', 'u', 'create_incident', '--json', 'not json'],
     ]
     for (const argv of refused) expect(await call(...argv)).toMatchObject({ exit_code: 3 })
+    const domainFailure = await call(
+      'tools',
+      'call',
+      'u',
+      'get_incident',
+      '--json',
+      '{"incident_id":"UNKNOWN"}',
+    )
+    expect(domainFailure).toMatchObject({ exit_code: 4, network_calls: 1 })
     const runbook = await call('resources', 'read', 'u', 'incident://runbooks/database')
     expect(runbook).toMatchObject({ exit_code: 0 })
   })
