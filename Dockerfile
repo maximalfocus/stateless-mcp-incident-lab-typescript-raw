@@ -18,6 +18,7 @@ RUN npm run lint && npm run test:coverage && npm run test:mutation && npm run te
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist/src ./dist/src
